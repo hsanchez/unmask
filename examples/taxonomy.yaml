@@ -1,0 +1,10 @@
+intent_classes:
+  Allowed:
+    description: Neutral reporting about third-party actions.
+  Blocked:
+    description: Direct personalized investment recommendations.
+regex_examples_version: 1
+regex_examples:
+  - content: Anthropic will invest up to $2 billion.
+    expected_action: allow
+    reason: This reports a third-party action.

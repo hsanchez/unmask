@@ -234,10 +234,13 @@ class SymbolicAnalyzer:
           metadata={
             "category": item.category,
             "excerpt": item.excerpt,
+            "ambiguityRationale": item.rationale,
             "interpretationA": item.interpretation_a.label,
             "interpretationADecision": item.interpretation_a.decision,
+            "interpretationARationale": item.interpretation_a.rationale,
             "interpretationB": item.interpretation_b.label,
             "interpretationBDecision": item.interpretation_b.decision,
+            "interpretationBRationale": item.interpretation_b.rationale,
           },
         )
       )

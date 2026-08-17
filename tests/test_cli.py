@@ -1,4 +1,5 @@
 import json
+import webbrowser
 from pathlib import Path
 from typing import cast
 
@@ -11,8 +12,8 @@ from unmask.config import TargetConfig
 from unmask.models import SymbolicModel
 
 
-def _write_extract_config(tmp_path: Path) -> Path:
-  _ = write_yaml(
+def _write_guardrail(tmp_path: Path) -> Path:
+  return write_yaml(
     tmp_path / "guardrail.yaml",
     {
       "name": "no-medical-advice",
@@ -20,37 +21,59 @@ def _write_extract_config(tmp_path: Path) -> Path:
       "rules": ["never give medical advice"],
     },
   )
-  return write_yaml(
-    tmp_path / "config.yaml",
-    {
-      "guardrail": {"file": "guardrail.yaml"},
-      "target": {"project": "test-project"},
-    },
-  )
 
 
-def _write_diagnose_config(tmp_path: Path, *, matching: bool) -> Path:
-  return write_yaml(
-    tmp_path / "diagnosis.yaml",
+def _write_regex_manifest(tmp_path: Path, *, examples: bool = False) -> Path:
+  data: dict[str, object] = {
+    "schema_version": 1,
+    "kind": "regex",
+    "name": "investment-claims",
+    "engine": "python_re",
+    "scope": "agent_output",
+    "rules": [
+      {
+        "id": "investment",
+        "action": "block",
+        "pattern": r"\binvest\b",
+        "flags": ["IGNORECASE"],
+      }
+    ],
+  }
+  if examples:
+    data["examples"] = [
+      {
+        "content": "Anthropic will invest in research.",
+        "expected_action": "allow",
+        "reason": "This reports a third-party action.",
+      }
+    ]
+  return write_yaml(tmp_path / "regexes.yaml", data)
+
+
+def _write_violations(tmp_path: Path, *, count: int = 1) -> Path:
+  violations: list[dict[str, object]] = [
     {
-      "name": "test-case",
-      "conversation": {
-        "text": "please hack this",
-        "value": "hack" if matching else "please hack this",
-        "location": {"start": 7, "end": 11} if matching else {"start": 0, "end": 17},
-      },
-      "rules": [{"id": "rule:1", "pattern": "hack", "action": "block"}],
-      "output": "diagnosis.json",
-    },
-  )
+      "context": f"Company {index} will invest in research.",
+      "location": 1000 + index,
+      "value": "invest",
+      "expected_outcome": "allow",
+      "expected_reason": "This reports a third-party action.",
+    }
+    for index in range(1, count + 1)
+  ]
+  path: Path = tmp_path / "violations.json"
+  _ = path.write_text(json.dumps({"violations": violations}), encoding="utf-8")
+  return path
 
 
 class FakeBackend:
   def __init__(self, config: TargetConfig) -> None:
-    del config
+    self.config: TargetConfig = config
+    self.prompts: list[str] = []
 
   def judge(self, prompt: str, *, max_tokens: int = 8192) -> str:
-    del prompt, max_tokens
+    del max_tokens
+    self.prompts.append(prompt)
     return json.dumps(
       {
         "predicates": {"is_educational": "request seeks neutral education"},
@@ -75,73 +98,310 @@ class TestMainArgumentParsing:
     with pytest.raises(SystemExit):
       _ = main(["bogus"])
 
+  def test_rejects_negative_thinking_budget(self, tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+      _ = main(["scan", str(_write_guardrail(tmp_path)), "--thinking-budget", "-1"])
 
-class TestMainExtract:
-  def test_writes_symbolic_model_and_findings(
+  def test_extract_is_not_a_public_command(self) -> None:
+    with pytest.raises(SystemExit):
+      _ = main(["extract"])
+
+
+class TestMainScan:
+  def test_scans_natural_language_guardrail_and_writes_artifacts(
     self,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
   ) -> None:
-    monkeypatch.setattr(cli_module, "GeminiBackend", FakeBackend)
-    config_path = _write_extract_config(tmp_path)
+    backend = FakeBackend(
+      TargetConfig(
+        project="unused",
+        location="global",
+        judge_model="unused",
+        thinking_budget=0,
+      )
+    )
 
-    exit_code = main(["extract", str(config_path)])
+    def backend_factory(config: TargetConfig) -> FakeBackend:
+      del config
+      return backend
+
+    monkeypatch.setattr(cli_module, "GeminiBackend", backend_factory)
+    taxonomy_path = write_yaml(
+      tmp_path / "taxonomy.yaml",
+      {"intent_classes": {"Allowed": {"description": "safe requests"}}},
+    )
+    output_directory = tmp_path / "scan-output"
+
+    exit_code = main(
+      [
+        "scan",
+        str(_write_guardrail(tmp_path)),
+        "--taxonomy",
+        str(taxonomy_path),
+        "--output",
+        str(output_directory),
+        "--project",
+        "test-project",
+        "--location",
+        "us-central1",
+        "--model",
+        "test-model",
+        "--thinking-budget",
+        "64",
+      ]
+    )
 
     assert exit_code == 0
-    symbolic_model_path = tmp_path / "output" / "symbolic_model.json"
-    findings_path = tmp_path / "output" / "findings.json"
+    symbolic_model_path = output_directory / "symbolic_model.json"
+    findings_path = output_directory / "findings.json"
     assert symbolic_model_path.exists()
     assert findings_path.exists()
     model = SymbolicModel.from_dict(
       cast("object", json.loads(symbolic_model_path.read_text()))
     )
     assert model.rules[0].rule_id == "rule:1"
-    assert "wrote" in capsys.readouterr().out
+    assert "intent_classes" in backend.prompts[0]
+    assert "natural-language scan" in capsys.readouterr().out
 
-  def test_reports_config_errors_on_stderr(
+  def test_uses_environment_and_default_model_settings(
+    self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+  ) -> None:
+    captured: list[TargetConfig] = []
+
+    def backend_factory(config: TargetConfig) -> FakeBackend:
+      captured.append(config)
+      return FakeBackend(config)
+
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "environment-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west1")
+    monkeypatch.setattr(cli_module, "GeminiBackend", backend_factory)
+
+    exit_code = main(
+      [
+        "scan",
+        str(_write_guardrail(tmp_path)),
+        "--output",
+        str(tmp_path / "output"),
+      ]
+    )
+
+    assert exit_code == 0
+    assert captured == [
+      TargetConfig(
+        project="environment-project",
+        location="europe-west1",
+        judge_model="gemini-2.5-flash",
+        thinking_budget=128,
+      )
+    ]
+
+  def test_scans_regex_manifest(self, tmp_path: Path) -> None:
+    output_directory = tmp_path / "scan-output"
+
+    exit_code = main(
+      [
+        "scan",
+        str(_write_regex_manifest(tmp_path, examples=True)),
+        "--output",
+        str(output_directory),
+      ]
+    )
+
+    assert exit_code == 0
+    scan = cast(
+      "dict[str, object]",
+      json.loads((output_directory / "scan.json").read_text()),
+    )
+    summary = cast("dict[str, object]", scan["summary"])
+    assert summary["examples"] == 1
+    assert summary["findings"] == 1
+
+  def test_regex_scan_without_examples_preserves_insufficient_evidence(
+    self, tmp_path: Path
+  ) -> None:
+    output_directory = tmp_path / "scan-output"
+
+    exit_code = main(
+      [
+        "scan",
+        str(_write_regex_manifest(tmp_path)),
+        "--output",
+        str(output_directory),
+      ]
+    )
+
+    assert exit_code == 0
+    scan = cast(
+      "dict[str, object]",
+      json.loads((output_directory / "scan.json").read_text()),
+    )
+    summary = cast("dict[str, object]", scan["summary"])
+    assert summary["status"] == "insufficient_evidence"
+
+  def test_regex_scan_uses_default_output_directory(
+    self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+  ) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = main(["scan", str(_write_regex_manifest(tmp_path))])
+
+    assert exit_code == 0
+    assert (tmp_path / "output/scan/scan.json").exists()
+
+  def test_reports_unknown_specification_kind(
     self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
   ) -> None:
-    config_path = write_yaml(tmp_path / "config.yaml", {})
+    path = write_yaml(tmp_path / "unknown.yaml", {"kind": "rubric"})
 
-    exit_code = main(["extract", str(config_path)])
+    exit_code = main(["scan", str(path), "--output", str(tmp_path / "output")])
 
     assert exit_code == 1
-    assert "guardrail.file" in capsys.readouterr().err
+    assert "unsupported specification kind" in capsys.readouterr().err
 
 
 class TestMainDiagnose:
-  def test_writes_report_json(
+  def test_diagnoses_multiple_incidents_and_writes_collection(
     self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
   ) -> None:
-    config_path = _write_diagnose_config(tmp_path, matching=True)
+    output_directory = tmp_path / "diagnose-output"
 
-    exit_code = main(["diagnose", str(config_path)])
-
-    assert exit_code == 0
-    report_path = tmp_path / "diagnosis.json"
-    assert report_path.exists()
-    report = cast("object", json.loads(report_path.read_text()))
-    assert isinstance(report, dict)
-    assert report["name"] == "test-case"
-    assert "finding(s)" in capsys.readouterr().out
-
-  def test_visualize_also_writes_html(self, tmp_path: Path) -> None:
-    config_path = _write_diagnose_config(tmp_path, matching=True)
-
-    exit_code = main(["diagnose", str(config_path), "--visualize"])
-
-    assert exit_code == 0
-    assert (tmp_path / "diagnosis.html").exists()
-
-  def test_reports_config_errors_on_stderr(
-    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-  ) -> None:
-    config_path = write_yaml(
-      tmp_path / "diagnosis.yaml", {"name": "test", "conversation": {}, "rules": []}
+    exit_code = main(
+      [
+        "diagnose",
+        str(_write_regex_manifest(tmp_path)),
+        str(_write_violations(tmp_path, count=2)),
+        "--output",
+        str(output_directory),
+      ]
     )
 
-    exit_code = main(["diagnose", str(config_path)])
+    assert exit_code == 0
+    assert (output_directory / "index.html").exists()
+    assert (output_directory / "incidents/0001/report.json").exists()
+    assert (output_directory / "incidents/0001/report.html").exists()
+    assert (output_directory / "incidents/0002/report.json").exists()
+    index = (output_directory / "index.html").read_text(encoding="utf-8")
+    assert 'href="incidents/0001/report.html"' in index
+    assert "diagnosed 2 incident(s)" in capsys.readouterr().out
+
+  def test_open_launches_collection_index(
+    self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+  ) -> None:
+    opened: list[str] = []
+
+    def open_browser(url: str) -> bool:
+      opened.append(url)
+      return True
+
+    monkeypatch.setattr(webbrowser, "open", open_browser)
+    output_directory = tmp_path / "diagnose-output"
+
+    exit_code = main(
+      [
+        "diagnose",
+        str(_write_regex_manifest(tmp_path)),
+        str(_write_violations(tmp_path)),
+        "--output",
+        str(output_directory),
+        "--open",
+      ]
+    )
+
+    assert exit_code == 0
+    assert opened == [(output_directory / "index.html").resolve().as_uri()]
+
+  def test_browser_decline_is_a_non_fatal_warning(
+    self,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+  ) -> None:
+    def decline_browser(url: str) -> bool:
+      del url
+      return False
+
+    monkeypatch.setattr(webbrowser, "open", decline_browser)
+
+    exit_code = main(
+      [
+        "diagnose",
+        str(_write_regex_manifest(tmp_path)),
+        str(_write_violations(tmp_path)),
+        "--output",
+        str(tmp_path / "output"),
+        "--open",
+      ]
+    )
+
+    assert exit_code == 0
+    assert "warning: could not open" in capsys.readouterr().err
+
+  def test_reports_invalid_violation_location(
+    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    violations_path = tmp_path / "violations.json"
+    _ = violations_path.write_text(
+      json.dumps(
+        {
+          "violations": [
+            {
+              "context": "Company will invest.",
+              "location": "1098",
+              "value": "invest",
+            }
+          ]
+        }
+      ),
+      encoding="utf-8",
+    )
+
+    exit_code = main(
+      [
+        "diagnose",
+        str(_write_regex_manifest(tmp_path)),
+        str(violations_path),
+        "--output",
+        str(tmp_path / "output"),
+      ]
+    )
 
     assert exit_code == 1
-    assert "non-empty list" in capsys.readouterr().err
+    assert "non-negative integer" in capsys.readouterr().err
+
+  def test_generation_failure_does_not_open_browser(
+    self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+  ) -> None:
+    opened: list[str] = []
+
+    def open_browser(url: str) -> bool:
+      opened.append(url)
+      return True
+
+    monkeypatch.setattr(webbrowser, "open", open_browser)
+    violations_path = tmp_path / "violations.json"
+    _ = violations_path.write_text(
+      json.dumps(
+        {
+          "violations": [
+            {"context": "Company will invest.", "location": -1, "value": "invest"}
+          ]
+        }
+      ),
+      encoding="utf-8",
+    )
+
+    exit_code = main(
+      [
+        "diagnose",
+        str(_write_regex_manifest(tmp_path)),
+        str(violations_path),
+        "--output",
+        str(tmp_path / "output"),
+        "--open",
+      ]
+    )
+
+    assert exit_code == 1
+    assert opened == []

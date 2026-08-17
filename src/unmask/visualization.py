@@ -439,10 +439,10 @@ Severity: {html.escape(s=finding.severity)}</p>
     expected_reason = incident.get("expectedReason")
     expected_source = incident.get("expectedOutcomeSource", "missing")
     outcome: str = (
-      "The guardrail match was reproduced, but Bugfinder could not prove "
+      "The guardrail match was reproduced, but Unmask could not prove "
       + "over-strictness, contradiction, or ambiguity from the supplied evidence."
       if matches
-      else "No regex matched the supplied incident location, so Bugfinder "
+      else "No regex matched the supplied incident location, so Unmask "
       + "could not test that incident for a supported defect."
     )
     return f"""<!doctype html>
@@ -478,9 +478,7 @@ def _collection_row(result: CollectionResult) -> str:
   value: str = html.escape(s=result["value"])
   visualization: str | None = result["visualization"]
   if visualization is not None:
-    visualization_path: Path = Path(visualization)
-    relative_link: str = f"{visualization_path.parent.name}/{visualization_path.name}"
-    report_cell: str = f'<a href="{html.escape(s=relative_link)}">Open report</a>'
+    report_cell: str = f'<a href="{html.escape(s=visualization)}">Open report</a>'
   else:
     report_cell = "Unavailable"
   return (
@@ -504,7 +502,7 @@ def render_collection_index(results: Sequence[CollectionResult]) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bugfinder diagnosis collection</title>
+<title>Unmask diagnosis collection</title>
 <style>
 body {{ max-width: 1000px; margin: 32px auto; padding: 0 20px;
   font-family: system-ui, sans-serif; color: #1f2328; }}
@@ -515,7 +513,7 @@ code {{ overflow-wrap: anywhere; }}
 </style>
 </head>
 <body>
-<h1>Bugfinder diagnosis collection</h1>
+<h1>Unmask diagnosis collection</h1>
 <p>Select a violation to view its faulty rule, natural-language counterexample
 explanation, remediation, and technical Z3 details.</p>
 <table>

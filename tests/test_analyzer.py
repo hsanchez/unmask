@@ -157,6 +157,10 @@ class TestSymbolicAnalyzerAnalyze:
     findings = SymbolicAnalyzer(model, _guardrail("rule:1")).analyze()
     bug_types = {finding.bug_type for finding in findings}
     assert "ambiguity" in bug_types
+    ambiguity = next(finding for finding in findings if finding.bug_type == "ambiguity")
+    assert ambiguity.metadata["ambiguityRationale"] == "no threshold defined"
+    assert ambiguity.metadata["interpretationARationale"] == "r"
+    assert ambiguity.metadata["interpretationBRationale"] == "r"
 
   def test_predicate_assignments_pin_the_solver(self) -> None:
     model = SymbolicModel(

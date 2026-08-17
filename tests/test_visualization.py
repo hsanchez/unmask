@@ -97,6 +97,7 @@ class TestRenderCollectionIndex:
     html = render_collection_index([result])
     assert "<table>" in html
     assert "Open report" in html
+    assert 'href="output/1/report.html"' in html
 
   def test_renders_unavailable_when_no_visualization(self) -> None:
     result: CollectionResult = {

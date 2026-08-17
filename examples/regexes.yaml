@@ -1,0 +1,16 @@
+schema_version: 1
+kind: regex
+name: investment-claims
+engine: python_re
+scope: agent_output
+match_timeout_seconds: 1.0
+rules:
+  - id: investment
+    action: block
+    pattern: '\b(?:buy|sell|invest)\b'
+    flags: [IGNORECASE]
+    description: Detect investment language.
+examples:
+  - content: Anthropic will invest up to $2 billion.
+    expected_action: allow
+    reason: This reports a third-party action.

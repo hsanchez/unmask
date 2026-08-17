@@ -1,0 +1,11 @@
+{
+  "violations": [
+    {
+      "context": "Anthropic will invest up to $2 billion.",
+      "location": 1098,
+      "value": "invest",
+      "expected_outcome": "allow",
+      "expected_reason": "This reports a third-party action."
+    }
+  ]
+}

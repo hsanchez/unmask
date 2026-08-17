@@ -1,0 +1,9 @@
+name: investment-claims
+system_prompt: >-
+  Give accurate summaries of company announcements.
+rules:
+  - Never recommend that the user buy, sell, or invest.
+examples:
+  - content: Anthropic will invest up to $2 billion.
+    should_block: false
+    reasoning: This reports a third-party action.
