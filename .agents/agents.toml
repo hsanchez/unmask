@@ -1,0 +1,101 @@
+version = 1
+
+[[sync]]
+source = "scripts/simplify-code"
+destination = "scripts/simplify-code"
+always_copy = true
+preserve_source = true
+
+[[sync]]
+source = "scripts/gh-issue"
+destination = "scripts/gh-issue"
+always_copy = true
+preserve_source = true
+
+[[sync]]
+source = "scripts/memlog"
+destination = "scripts/memlog"
+always_copy = true
+preserve_source = true
+
+[[sync]]
+source = "scripts/review-branch"
+destination = "scripts/review-branch"
+always_copy = true
+preserve_source = true
+
+[[sync]]
+source = "scripts/review-code"
+destination = "scripts/review-code"
+always_copy = true
+preserve_source = true
+
+[[sync]]
+source = "hooks/discovery-common.sh"
+destination = ".agents/hooks/discovery-common.sh"
+always_copy = true
+link = false
+
+[[sync]]
+source = "hooks/dangerous_commands.py"
+destination = ".agents/hooks/dangerous_commands.py"
+always_copy = true
+link = false
+
+[[sync]]
+source = ".rules"
+destination = "AGENTS.md"
+
+[providers]
+
+[providers.claude]
+sync = [
+  { source = ".rules", destination = "CLAUDE.md" },
+  { source = ".rules", destination = ".claude/CLAUDE.md", scope = "global" },
+  { source = "scripts", destination = ".claude/commands", scope = "both" },
+  { source = "skills", destination = ".claude/skills", scope = "both" },
+  { source = "claude/settings.json", destination = ".claude/settings.json", scope = "both" },
+  { source = "claude/hooks/session-start.sh", destination = ".claude/hooks/session-start.sh", scope = "both" },
+  { source = "skills/git-guardrails/scripts/block-dangerous-git", destination = ".claude/hooks/block-dangerous-git", skill = "git-guardrails" },
+  { source = "hooks/dangerous_commands.py", destination = ".claude/hooks/dangerous_commands.py", skill = "git-guardrails" }
+]
+
+[providers.copilot]
+sync = [
+  { source = ".rules", destination = ".github/copilot-instructions.md" },
+  { source = "copilot/review.prompt.md", destination = ".github/prompts/dotagents-review.prompt.md" },
+  { source = "copilot/agents/reviewer.agent.md", destination = ".github/agents/dotagents-reviewer.agent.md" },
+  { source = "copilot/hooks/dotagents-discovery.json", destination = ".github/hooks/dotagents-discovery.json" },
+  { source = "copilot/autonomy.json", destination = ".github/hooks/dotagents-autonomy.json" },
+  { source = "hooks/autonomy-policy", destination = ".github/hooks/dotagents-autonomy-policy" },
+  { source = "hooks/dangerous_commands.py", destination = ".github/hooks/dangerous_commands.py" }
+]
+
+[providers.agy]
+sync = [
+  { source = "agy/plugin.json", destination = ".agents/plugins/dotagents-autonomy/plugin.json" },
+  { source = "agy/hooks.json", destination = ".agents/plugins/dotagents-autonomy/hooks.json" },
+  { source = "hooks/autonomy-policy", destination = ".agents/plugins/dotagents-autonomy/dotagents-autonomy-policy" },
+  { source = "hooks/dangerous_commands.py", destination = ".agents/plugins/dotagents-autonomy/dangerous_commands.py" }
+]
+
+[providers.gemini]
+default = false
+status = "compatibility"
+status_detail = "Enterprise/API key"
+notice = "Gemini CLI is retained for Enterprise/API-key users; individual users should select agy."
+sync = [
+  { source = ".rules", destination = "GEMINI.md" },
+  { source = ".rules", destination = ".gemini/GEMINI.md", scope = "global" },
+  { source = "gemini/settings.json", destination = ".gemini/settings.json" },
+  { source = "gemini/hooks/session-start.sh", destination = ".gemini/hooks/session-start.sh" }
+]
+
+[providers.codex]
+sync = [
+  { source = ".rules", destination = "CODEX.md" },
+  { source = "codex/config.toml", destination = ".codex/config.toml" },
+  { source = "codex/agents/reviewer.toml", destination = ".codex/agents/reviewer.toml" },
+  { source = "codex/hooks.json", destination = ".codex/hooks.json" },
+  { source = "codex/hooks/session-start.sh", destination = ".codex/hooks/session-start.sh" }
+]

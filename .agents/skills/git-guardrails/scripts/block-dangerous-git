@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Hook adapter for blocking dangerous git operations across providers."""
+
+import json
+import runpy
+import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, cast
+
+sys.dont_write_bytecode = True
+
+
+DangerousCommandReason = Callable[[str], str | None]
+
+
+def _dangerous_commands_path() -> Path:
+  script_path = Path(__file__).resolve()
+  adjacent_path = script_path.with_name("dangerous_commands.py")
+  if adjacent_path.is_file():
+    return adjacent_path
+  runtime_path = script_path.parents[3] / "hooks" / "dangerous_commands.py"
+  if runtime_path.is_file():
+    return runtime_path
+  raise ImportError("cannot locate hooks/dangerous_commands.py")
+
+
+def _load_dangerous_command_reason() -> DangerousCommandReason:
+  namespace = runpy.run_path(str(_dangerous_commands_path()))
+  classifier = namespace["dangerous_command_reason"]
+  if not callable(classifier):
+    raise TypeError("dangerous_command_reason is not callable")
+  return cast(DangerousCommandReason, classifier)
+
+_COMMAND_PATHS: tuple[tuple[str, ...], ...] = (
+  ("tool_input", "command"),
+  ("toolInput", "command"),
+  ("input", "command"),
+  ("command",),
+)
+
+
+def _nested_get(payload: dict[str, Any], path: tuple[str, ...]) -> str:
+  value: Any = payload
+  for key in path:
+    if not isinstance(value, dict):
+      return ""
+    value = value.get(key)
+  return value if isinstance(value, str) else ""
+
+
+def _extract_command(payload: dict[str, Any]) -> str:
+  for path in _COMMAND_PATHS:
+    command = _nested_get(payload, path)
+    if command:
+      return command
+  tool_arguments = payload.get("toolArgs")
+  if isinstance(tool_arguments, str):
+    try:
+      tool_arguments = json.loads(tool_arguments)
+    except json.JSONDecodeError:
+      return ""
+  if isinstance(tool_arguments, dict):
+    command = tool_arguments.get("command")
+    if isinstance(command, str):
+      return command
+  return ""
+
+
+def _deny(reason: str, output_format: str) -> int:
+  if output_format == "copilot":
+    print(
+      json.dumps(
+        {
+          "permissionDecision": "deny",
+          "permissionDecisionReason": reason,
+        }
+      )
+    )
+    return 0
+  print(reason, file=sys.stderr)
+  return 2
+
+
+def _allow(output_format: str) -> int:
+  if output_format == "copilot":
+    print("{}")
+  return 0
+
+
+def _output_format(args: list[str]) -> str:
+  if args == ["--format", "copilot"]:
+    return "copilot"
+  if args in ([], ["--format", "claude"]):
+    return "claude"
+  print("usage: block-dangerous-git [--format claude|copilot]", file=sys.stderr)
+  return "usage-error"
+
+
+def main() -> int:
+  output_format = _output_format(sys.argv[1:])
+  if output_format == "usage-error":
+    return 2
+  try:
+    dangerous_command_reason = _load_dangerous_command_reason()
+  except Exception as error:
+    # A broken security control must produce a provider decision, not a traceback.
+    return _deny(
+      f"git-guardrails: dangerous-command classifier unavailable ({error}) — blocking.",
+      output_format,
+    )
+
+  try:
+    payload = json.load(sys.stdin)
+  except (json.JSONDecodeError, ValueError) as exc:
+    return _deny(f"git-guardrails: cannot parse hook payload ({exc}) — blocking.", output_format)
+
+  if not isinstance(payload, dict):
+    return _allow(output_format)
+
+  command = _extract_command(payload)
+  if not command:
+    return _allow(output_format)
+
+  reason = dangerous_command_reason(command)
+  if reason:
+    return _deny(f"BLOCKED: {reason}.\n  Command: {command!r}", output_format)
+
+  return _allow(output_format)
+
+
+if __name__ == "__main__":
+  sys.exit(main())

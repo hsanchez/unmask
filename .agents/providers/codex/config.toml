@@ -1,0 +1,21 @@
+# Project-scoped Codex settings for repos initialized with dotagents.
+# Codex discovers AGENTS.md automatically. dotagents creates AGENTS.md -> .rules.
+
+project_doc_max_bytes = 65536
+project_doc_fallback_filenames = [
+    "CODEX.md",
+    ".rules",
+]
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[agents]
+max_threads = 6
+max_depth = 1
+
+[agents.reviewer]
+description = "Review code for correctness, security, test coverage, and maintainability without editing files."
+config_file = "./agents/reviewer.toml"
+nickname_candidates = [
+    "Reviewer",
+]

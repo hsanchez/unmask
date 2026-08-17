@@ -1,0 +1,9 @@
+#!/bin/sh
+# Installed by git-guardrails. Humans bypass with: git push --no-verify
+# CI/CD bypasses automatically via $CI.
+if [ -n "${CI:-}" ]; then
+  exit 0
+fi
+echo "git-guardrails: push blocked by agent safety policy." >&2
+echo "To push intentionally, run: git push --no-verify" >&2
+exit 1

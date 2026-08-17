@@ -1,0 +1,1 @@
+../../.agents/providers/gemini/hooks/session-start.sh

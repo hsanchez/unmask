@@ -1,0 +1,393 @@
+lockfile_version = 3
+version = "0.2.0"
+package = "dotagents"
+manifest_sha256 = "52d77220b6254f8eb3881d72abcb5c9c978e3349f29977b1ba889622f320efcb"
+providers = [
+    "claude",
+    "copilot",
+    "agy",
+    "gemini",
+    "codex",
+]
+skills = [
+    "dotagents-discovery",
+    "audit",
+    "clarify",
+    "council",
+    "create-pr",
+    "cross-critique",
+    "git-guardrails",
+    "handoff",
+    "research",
+    "resume-handoff",
+    "startup",
+    "unpack",
+]
+skillfile_sha256 = "8ec6f85572a102e0ee8be153161a0a8c2a8986c9804feabe01f8aadef430c931"
+generated_at = "2026-08-17T17:02:32.822799+00:00"
+
+[provider_autonomy]
+agy = "supervised"
+claude = "supervised"
+codex = "supervised"
+copilot = "supervised"
+gemini = "supervised"
+
+[[assets]]
+source = "agents.toml"
+destination = ".agents/agents.toml"
+sha256 = "52d77220b6254f8eb3881d72abcb5c9c978e3349f29977b1ba889622f320efcb"
+
+[[assets]]
+source = "scripts/simplify-code"
+destination = ".agents/scripts/simplify-code"
+sha256 = "90eed6b95ad85614f1feb8d01450c05b487ce3816c694760baa1a5557e076a1e"
+
+[[assets]]
+source = "scripts/gh-issue"
+destination = ".agents/scripts/gh-issue"
+sha256 = "37a951b183e8893575a6f31f720af4a5fd901f6780f4477e637c07902bad265d"
+
+[[assets]]
+source = "scripts/memlog"
+destination = ".agents/scripts/memlog"
+sha256 = "09c6b8019f4e938a257bdb84fa957110e9b6afee8e82065521bed6bb93078c21"
+
+[[assets]]
+source = "scripts/review-branch"
+destination = ".agents/scripts/review-branch"
+sha256 = "4fe7b067da8bcec59ed5d36398801cdedc9a2829696b2dfd4a09a19bf6c449f1"
+
+[[assets]]
+source = "scripts/review-code"
+destination = ".agents/scripts/review-code"
+sha256 = "b83732970c9dd976bc18c3f7c5fad56fcba3bdb69b40571d4ab9b80eb801e320"
+
+[[assets]]
+source = "hooks/discovery-common.sh"
+destination = ".agents/hooks/discovery-common.sh"
+sha256 = "c3dd0863a00b36f7e8b31f1e8733baf2b3e9d3776e7efc38660c0e5556ce8bdb"
+
+[[assets]]
+source = "hooks/dangerous_commands.py"
+destination = ".agents/hooks/dangerous_commands.py"
+sha256 = "438482d32737ab9de605061aba521692333748f18d2fb14b7a8e6290d7b32bee"
+
+[[assets]]
+source = "claude/settings.json"
+destination = ".agents/providers/claude/settings.json"
+sha256 = "6c2317ecf4cb988df069d29d0474534c76250fb7adb2e03dbfb0f37cf59599dd"
+
+[[assets]]
+source = "claude/hooks/session-start.sh"
+destination = ".agents/providers/claude/hooks/session-start.sh"
+sha256 = "9bfde1860f9082f0effc17cb6691b20f866e10f6a5811a99b93257e6485d4aa8"
+
+[[assets]]
+source = "skills/git-guardrails/scripts/block-dangerous-git"
+destination = ".agents/skills/git-guardrails/scripts/block-dangerous-git"
+sha256 = "5357b98e87c7e9576c9fbb80281d2f583b4776abaec670f113b9f27d75451f19"
+
+[[assets]]
+source = "copilot/review.prompt.md"
+destination = ".agents/providers/copilot/review.prompt.md"
+sha256 = "2164a211ac3ea930b22db08f21edfb6b08fd6c76403ddff1d777979303c1d1a8"
+
+[[assets]]
+source = "copilot/agents/reviewer.agent.md"
+destination = ".agents/providers/copilot/agents/reviewer.agent.md"
+sha256 = "49c201e52ec17f2616aad2c8c2d967a360022ed6fae4d2606c6162751d5ecad6"
+
+[[assets]]
+source = "copilot/hooks/dotagents-discovery.json"
+destination = ".agents/providers/copilot/hooks/dotagents-discovery.json"
+sha256 = "8a78d636a160c3121c65534279c91c0829495b22520f5d676d4d08a049f32116"
+
+[[assets]]
+source = "copilot/autonomy.json"
+destination = ".agents/providers/copilot/autonomy.json"
+sha256 = "f2a407cdbc6f20a52a4172343e6b9f1ff002451f424602d26eb2fdae9b359264"
+
+[[assets]]
+source = "hooks/autonomy-policy"
+destination = ".agents/hooks/autonomy-policy"
+sha256 = "d78b585c4df5517e9e5a59d2812a636b8d44d8b58027068bf4680248fe2311ea"
+
+[[assets]]
+source = "agy/plugin.json"
+destination = ".agents/providers/agy/plugin.json"
+sha256 = "f8db7f1c8b58b8b3798ea49929d470846f6a5da3b4957113da1eb36083df9a56"
+
+[[assets]]
+source = "agy/hooks.json"
+destination = ".agents/providers/agy/hooks.json"
+sha256 = "3361c6263bd15f1c3ea946309631be3e3ba5ed15be8a2547f7bbb3016a6dc17b"
+
+[[assets]]
+source = "gemini/settings.json"
+destination = ".agents/providers/gemini/settings.json"
+sha256 = "1f2dceca5bde266f055e4cf4d24beaa2aa22d9248eaf36c76cb0e02653d5820a"
+
+[[assets]]
+source = "gemini/hooks/session-start.sh"
+destination = ".agents/providers/gemini/hooks/session-start.sh"
+sha256 = "0e26a73c914686d84ee857fb7b90becd4aecf5f1d350778a76c91b14bb227340"
+
+[[assets]]
+source = "codex/config.toml"
+destination = ".agents/providers/codex/config.toml"
+sha256 = "ed96b7dc5c7542478dc85bb173400bea5890baba9a2df7193d8892bc66fa098d"
+
+[[assets]]
+source = "codex/agents/reviewer.toml"
+destination = ".agents/providers/codex/agents/reviewer.toml"
+sha256 = "60f78a230af7175e2a4aea1ba79c8702ecc411aeb355ab1e186c1165fa3e07dd"
+
+[[assets]]
+source = "codex/hooks.json"
+destination = ".agents/providers/codex/hooks.json"
+sha256 = "7afcefe9ccdb188f6b04e65d3f91e7ff1ebefb156e32be26f61068b6f6e5c6ff"
+
+[[assets]]
+source = "codex/hooks/session-start.sh"
+destination = ".agents/providers/codex/hooks/session-start.sh"
+sha256 = "03b32e9369c6de656d40fefd7b5d5c5d67a9dc3889ce2d7d827c6bee185f151c"
+
+[[assets]]
+source = "skills/dotagents-discovery/SKILL.md"
+destination = ".agents/skills/dotagents-discovery/SKILL.md"
+sha256 = "73ccb7811705f24ac36982f139378ad033ec70b3c9ae4206504ab1b86d7e2562"
+
+[[assets]]
+source = "skills/audit/SKILL.md"
+destination = ".agents/skills/audit/SKILL.md"
+sha256 = "5e18d47743a0d4c408919eb7cd3b70a858331db4f29cde6a6dec9e0b0af951fd"
+
+[[assets]]
+source = "skills/audit/prompts/adversary.txt"
+destination = ".agents/skills/audit/prompts/adversary.txt"
+sha256 = "3c46797731cdcb5d7729ab3f49ae54b9551e444b6ed2a8ceaa4c4cc71f0e5d58"
+
+[[assets]]
+source = "skills/audit/prompts/auditor.txt"
+destination = ".agents/skills/audit/prompts/auditor.txt"
+sha256 = "8c1baad046988cc69f1daeffa304a7d926c9f4ecae913700427bb97177ec87f3"
+
+[[assets]]
+source = "skills/audit/prompts/pragmatic.txt"
+destination = ".agents/skills/audit/prompts/pragmatic.txt"
+sha256 = "233689c0d584f3f0927764d81d0c5132d07ef51e3cd54456c6264693ecf89a34"
+
+[[assets]]
+source = "skills/clarify/SKILL.md"
+destination = ".agents/skills/clarify/SKILL.md"
+sha256 = "0bc2e152bceb87dcdc99af3e24d546e5732d653b25078e0d0019ade095330c86"
+
+[[assets]]
+source = "skills/council/SKILL.md"
+destination = ".agents/skills/council/SKILL.md"
+sha256 = "56264a225048c8accf2d6abc2f860221faf6c3ecaf3182c394257077f240c393"
+
+[[assets]]
+source = "skills/council/scripts/run-agents"
+destination = ".agents/skills/council/scripts/run-agents"
+sha256 = "c95d895a89e2f88914bd12c02ad59252933321c6c97b5d994b5c1c40f78cd2ba"
+
+[[assets]]
+source = "skills/create-pr/SKILL.md"
+destination = ".agents/skills/create-pr/SKILL.md"
+sha256 = "3ce1f4f60cf1902f3862e326db4d2027aa44d6069f2460e25e5c6d8a18578138"
+
+[[assets]]
+source = "skills/cross-critique/SKILL.md"
+destination = ".agents/skills/cross-critique/SKILL.md"
+sha256 = "24ffa941b151e5a37b59e12f12718d3a1a5f99dc350427f56162828d9b91c5b4"
+
+[[assets]]
+source = "skills/git-guardrails/SKILL.md"
+destination = ".agents/skills/git-guardrails/SKILL.md"
+sha256 = "babc5b2e006265a8e9eb31f79beba206056f069e9448476eac27a5b00c32ba31"
+
+[[assets]]
+source = "skills/git-guardrails/scripts/pre-push"
+destination = ".agents/skills/git-guardrails/scripts/pre-push"
+sha256 = "da31be68246bdeb69a764bbc65709280ddf3e67aa147aeee435613286df4b3cd"
+
+[[assets]]
+source = "skills/handoff/SKILL.md"
+destination = ".agents/skills/handoff/SKILL.md"
+sha256 = "428777afe04e404fba8a94047b8f33efab640fa8beb9862d29e83ad22fa2980b"
+
+[[assets]]
+source = "skills/research/SKILL.md"
+destination = ".agents/skills/research/SKILL.md"
+sha256 = "2dab9634779a5118f5c4579138373a2a2d56fb0eda95f20b7189de8606bf9fd8"
+
+[[assets]]
+source = "skills/resume-handoff/SKILL.md"
+destination = ".agents/skills/resume-handoff/SKILL.md"
+sha256 = "ede45279c17f47b7a6a959fd7300ad65e9ca6f9824d73b0a040458b9b36be1d5"
+
+[[assets]]
+source = "skills/startup/SKILL.md"
+destination = ".agents/skills/startup/SKILL.md"
+sha256 = "569cffc1a907fce7dec1ff0aa0bdcdcb50abaee464304cda000adb3b31de4a33"
+
+[[assets]]
+source = "skills/unpack/SKILL.md"
+destination = ".agents/skills/unpack/SKILL.md"
+sha256 = "a2ca4662897e5ee42d3bec9d42d03d14b0aec71558e8b804f8b8c96dcddbdb8c"
+
+[[links]]
+destination = "scripts/simplify-code"
+target = "../.agents/scripts/simplify-code"
+
+[[links]]
+destination = "scripts/gh-issue"
+target = "../.agents/scripts/gh-issue"
+
+[[links]]
+destination = "scripts/memlog"
+target = "../.agents/scripts/memlog"
+
+[[links]]
+destination = "scripts/review-branch"
+target = "../.agents/scripts/review-branch"
+
+[[links]]
+destination = "scripts/review-code"
+target = "../.agents/scripts/review-code"
+
+[[links]]
+destination = "AGENTS.md"
+target = ".rules"
+
+[[links]]
+destination = "CLAUDE.md"
+target = ".rules"
+provider = "claude"
+
+[[links]]
+destination = ".claude/commands"
+target = "../.agents/scripts"
+provider = "claude"
+
+[[links]]
+destination = ".claude/skills"
+target = "../.agents/skills"
+provider = "claude"
+
+[[links]]
+destination = ".claude/settings.json"
+target = "../.agents/providers/claude/settings.json"
+provider = "claude"
+
+[[links]]
+destination = ".claude/hooks/session-start.sh"
+target = "../../.agents/providers/claude/hooks/session-start.sh"
+provider = "claude"
+
+[[links]]
+destination = ".claude/hooks/block-dangerous-git"
+target = "../../.agents/skills/git-guardrails/scripts/block-dangerous-git"
+provider = "claude"
+
+[[links]]
+destination = ".claude/hooks/dangerous_commands.py"
+target = "../../.agents/hooks/dangerous_commands.py"
+provider = "claude"
+
+[[links]]
+destination = ".github/copilot-instructions.md"
+target = "../.rules"
+provider = "copilot"
+
+[[links]]
+destination = ".github/prompts/dotagents-review.prompt.md"
+target = "../../.agents/providers/copilot/review.prompt.md"
+provider = "copilot"
+
+[[links]]
+destination = ".github/agents/dotagents-reviewer.agent.md"
+target = "../../.agents/providers/copilot/agents/reviewer.agent.md"
+provider = "copilot"
+
+[[links]]
+destination = ".github/hooks/dotagents-discovery.json"
+target = "../../.agents/providers/copilot/hooks/dotagents-discovery.json"
+provider = "copilot"
+
+[[links]]
+destination = ".github/hooks/dotagents-autonomy.json"
+target = "../../.agents/providers/copilot/autonomy.json"
+provider = "copilot"
+
+[[links]]
+destination = ".github/hooks/dotagents-autonomy-policy"
+target = "../../.agents/hooks/autonomy-policy"
+provider = "copilot"
+
+[[links]]
+destination = ".github/hooks/dangerous_commands.py"
+target = "../../.agents/hooks/dangerous_commands.py"
+provider = "copilot"
+
+[[links]]
+destination = ".agents/plugins/dotagents-autonomy/plugin.json"
+target = "../../providers/agy/plugin.json"
+provider = "agy"
+
+[[links]]
+destination = ".agents/plugins/dotagents-autonomy/hooks.json"
+target = "../../providers/agy/hooks.json"
+provider = "agy"
+
+[[links]]
+destination = ".agents/plugins/dotagents-autonomy/dotagents-autonomy-policy"
+target = "../../hooks/autonomy-policy"
+provider = "agy"
+
+[[links]]
+destination = ".agents/plugins/dotagents-autonomy/dangerous_commands.py"
+target = "../../hooks/dangerous_commands.py"
+provider = "agy"
+
+[[links]]
+destination = "GEMINI.md"
+target = ".rules"
+provider = "gemini"
+
+[[links]]
+destination = ".gemini/settings.json"
+target = "../.agents/providers/gemini/settings.json"
+provider = "gemini"
+
+[[links]]
+destination = ".gemini/hooks/session-start.sh"
+target = "../../.agents/providers/gemini/hooks/session-start.sh"
+provider = "gemini"
+
+[[links]]
+destination = "CODEX.md"
+target = ".rules"
+provider = "codex"
+
+[[links]]
+destination = ".codex/config.toml"
+target = "../.agents/providers/codex/config.toml"
+provider = "codex"
+
+[[links]]
+destination = ".codex/agents/reviewer.toml"
+target = "../../.agents/providers/codex/agents/reviewer.toml"
+provider = "codex"
+
+[[links]]
+destination = ".codex/hooks.json"
+target = "../.agents/providers/codex/hooks.json"
+provider = "codex"
+
+[[links]]
+destination = ".codex/hooks/session-start.sh"
+target = "../../.agents/providers/codex/hooks/session-start.sh"
+provider = "codex"

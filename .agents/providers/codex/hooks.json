@@ -1,0 +1,17 @@
+{
+  "description": "Load the dotagents skill-discovery meta-skill at session start.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'cd \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)\" && sh .codex/hooks/session-start.sh'",
+            "statusMessage": "Loading dotagents skill discovery"
+          }
+        ]
+      }
+    ]
+  }
+}

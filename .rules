@@ -1,0 +1,257 @@
+<!-- Shared agent rules from dotagents package rules/rules.md -->
+
+# Python coding guidelines
+
+* Prioritize code correctness, clarity, and maintainability. Speed and cleverness are secondary unless explicitly required.
+* Prefer simple, direct code over clever abstractions.
+* Do not write comments that merely summarize what the code does. Comments should explain why something is done when the reason is non-obvious.
+* Prefer implementing functionality in existing files unless introducing a genuinely new logical component. Avoid creating many small files.
+* Use descriptive names. Avoid abbreviations like `cfg`, `ctx`, `res`, `q`, or `tmp` unless they are conventional in the local context.
+* Prefer explicit control flow over overly compact expressions.
+* Use type hints for public functions, important internal functions, dataclasses, and complex data structures.
+* Prefer `dataclass`, `TypedDict`, `Protocol`, `Enum`, and `StrEnum` when they make the domain model clearer.
+* Prefer `pathlib.Path` over stringly-typed filesystem paths.
+* Prefer `subprocess.run(..., check=True)` over ignoring return codes.
+* Do not silently discard errors. Avoid broad `except Exception: pass`.
+* When catching exceptions:
+  - Catch the narrowest exception type possible.
+  - Add context when re-raising.
+  - Log the error if it is intentionally non-fatal.
+  - Do not hide failures that the caller or user needs to know about.
+* Prefer raising clear domain-specific exceptions over returning ambiguous `None` or `False` for failure.
+* Avoid mutable default arguments. Use `None` and initialize inside the function.
+* Avoid global mutable state unless there is a clear reason.
+* Keep functions small enough to understand, but do not split code into tiny functions just for the sake of splitting.
+* Prefer early returns over deeply nested conditionals.
+* Prefer dependency injection for things that touch the filesystem, network, clock, randomness, or external services.
+* Avoid side effects in constructors. Keep object initialization cheap and predictable.
+* For async code:
+  - Do not block the event loop with synchronous I/O or CPU-heavy work.
+  - Propagate errors to the caller/UI layer when the user needs meaningful feedback.
+  - Prefer `asyncio.TaskGroup` for structured concurrency when available.
+  - Avoid fire-and-forget tasks unless their lifecycle and error handling are explicit.
+* Never use bare `assert` for runtime validation of user input or external data. Use explicit checks and raise appropriate exceptions.
+* Validate external inputs at boundaries: CLI args, API responses, files, environment variables, model outputs, and user-provided data.
+* Prefer `match` only when it improves readability over `if`/`elif`.
+* Prefer f-strings for formatting.
+* Prefer `enumerate`, `zip`, comprehensions, and generator expressions when they improve clarity.
+* Avoid premature optimization. If performance matters, measure first.
+* Avoid creative additions unless explicitly requested.
+* Tests should cover behavior, edge cases, and failure paths. Do not only test the happy path.
+* Keep public APIs boring, predictable, and hard to misuse.
+
+## Code Standards
+
+- Python ≥ 3.14 with full type annotations
+- Use `from __future__ import annotations` only where needed: files with forward references, TYPE_CHECKING blocks, or complex type annotations
+- 2-space indentation, never tabs
+- Imports at module level — never inside functions or test bodies
+- Never use bare `except` — always specify the exception type
+- Minimize `# type: ignore` — fix types properly instead
+- No abbreviations in variable names (`queue` not `q`)
+- No comments that summarize what code does — only explain non-obvious *why*
+- Prioritize clarity over cleverness
+- Follow existing patterns; maintain consistency across the codebase
+
+## Docstring Standards
+
+Follow lightweight Google style — type annotations already document types, so docstrings should only add what the signature cannot express.
+
+- **Module**: one or two sentences max; purpose only, no RST/NumPy section headers.
+- **Class**: one-line summary. Add a short paragraph only when behavior is non-obvious from the name and type annotations.
+- **Dataclass `Attributes:`**: never — field names and type annotations are self-documenting.
+- **Method `Args:`**: omit when parameters are obvious from names and types. Add only when behavior differs from what the signature implies (e.g., a flag that is silently ignored, a surprising default).
+- **Method `Returns:`**: include only for non-obvious return shapes (tuples, composite objects). Skip when the return type annotation is sufficient.
+- **`Raises:`**: always include — callers need it.
+
+## Module & Package Standards
+
+- Prefer implementing functionality in existing files unless it is a genuinely new logical component
+- Avoid creating many small files
+- `__init__.py` exports (`__all__`) are a DX surface for framework *users*, not internal convenience — curate ruthlessly; the framework itself imports directly from modules
+
+## Testing Standards
+
+- Each test: atomic, self-contained, covers a single piece of functionality
+- Use parameterization for multiple examples of the same behavior
+- Use separate tests for distinct functionality
+- `asyncio_mode = "auto"` is set globally — never add `@pytest.mark.asyncio` to individual tests
+- Run pytest after any significant change
+- Every new feature needs corresponding tests
+
+
+# Project Management
+
+Default: use GitHub Issues for task tracking.
+
+- Do not create or maintain `PLAN.md`
+- When starting a task, ask the user for the relevant issue number if not provided
+- Reference issue numbers in commit messages: `fix #42` or `closes #42`
+- Never create, close, or comment on issues without explicit user instruction
+
+Override:
+- If the user says "no GitHub issues for this" or "skip issues for this" (current task only):
+  - Do not ask for or reference issue numbers
+  - Use `PLAN.md` for task tracking instead (create or maintain as needed)
+  - Use `TodoWrite` to track multi-step tasks; check off items as completed — persists within the session only, not to disk
+  - If `TodoWrite` is unavailable, use the closest available session plan tool
+
+# Documentation
+
+## `docs/decisions/`
+
+Architecture Decision Records (ADRs). Records *why* core decisions were made.
+Format: `NNN-short-name.md` (e.g., `001-mvp-scope.md`)
+
+Create a new ADR when:
+- Choosing between multiple valid approaches
+- Making scope decisions (what's in/out)
+- Selecting technologies
+- Establishing patterns that affect multiple components
+
+Only create one if all three are true:
+- Hard to reverse — the cost of changing your mind later is meaningful
+- Surprising without context — a future reader will wonder "why did they do it this way?"
+- Real trade-off — there were genuine alternatives and you picked one for specific reasons
+
+Basic ADR format:
+
+```md
+# {Short title of the decision}
+
+{1-3 sentences: what's the context, what did we decide, and why.}
+```
+
+Only include these when they add genuine value. Most ADRs won't need them.
+
+- **Status** frontmatter (`proposed | accepted | deprecated | superseded by ADR-NNNN`) — useful when decisions are revisited
+- **Considered Options** — only when the rejected alternatives are worth remembering
+- **Consequences** — only when non-obvious downstream effects need to be called out
+
+# Required Development Workflow
+
+**CRITICAL**: Always run these commands before committing:
+
+```bash
+uv sync                       # Install dependencies
+uv run prek run --all-files   # Lint (ruff) + type check (ty)
+uv run pytest                 # Run tests
+```
+
+All must pass — enforced by CI.
+
+## Build Guidelines
+
+- Use `uv run prek run --all-files` for the full lint/type check path.
+- Use `uv run pytest` for the full test suite.
+- Prefer `uv run ...` over directly invoking project Python tools.
+
+# Git & Commits
+
+- Never force-push on collaborative repos
+- Never amend commits
+- Commit messages: brief headlines only
+- Run all checks before committing
+
+## Writing Style (for docs and comments)
+
+- Be brief and direct
+- State what something *is* — never use "This isn't..." or "not just..." constructions
+
+# Memory Discipline
+
+- `MEMORY.md` at the repo root holds the current compressed project state — rewritten to stay concise, never append-only.
+- `MEMORY_LOG.md` at the repo root holds raw timestamped entries.
+- `MEMORY_LOG.md` is never committed to the repo — It is a personal artifact.
+
+Rules:
+- Never store secrets, credentials, or speculation in either file.
+- Never store information from local `.scratch` directory unless explicitly told to do so; treat it as a temporary scratchpad for the current task.
+- Log entry format: `YYYY-MM-DD HH:MM — <1-3 line factual update>`
+- Never write timestamps manually — use the `memlog` command to append entries, which provides the current local time automatically.
+- Read `MEMORY.md` at the start of each task. Consult `MEMORY_LOG.md` only when debugging or recovering context or recovering from errors.
+- **Never write to** `~/.claude/projects/*/memory/MEMORY.md` when a memory discipline is specified in this file.
+
+Operations:
+- When asked to "update memory", append entries to `MEMORY_LOG.md` only.
+- When asked to "compress memory", rewrite `MEMORY.md` to reflect current project state and remove the compressed entries from `MEMORY_LOG.md`. Compress when `MEMORY_LOG.md` exceeds ~100 entries, or when explicitly asked.
+
+Never used:
+- `MEMORY.local.md`
+- `MEMORY_LOG.local.md`
+
+Bootstrapping (if files are absent):
+- `MEMORY.md`: create with content `# PROJECT MEMORY\n\n## Entries\n`
+- `MEMORY_LOG.md`: create with content `# MEMORY LOG\n\n## Entries\n`
+
+# Pull request hygiene
+
+When an agent opens or updates a pull request, it must:
+
+- Use a clear, correctly capitalized, imperative PR title (for example, `Fix crash in project panel`).
+- Avoid conventional commit prefixes in PR titles (`fix:`, `feat:`, `docs:`, etc.).
+- Avoid trailing punctuation in PR titles.
+- Optionally prefix the title with a module name when one module is the clear scope (for example, `core: Add new LLM provider`).
+- Include a `Release Notes:` section as the final section in the PR body.
+- Use one bullet under `Release Notes:`:
+  - `- Added ...`, `- Fixed ...`, or `- Improved ...` for user-facing changes, or
+  - `- N/A` for docs-only and other non-user-facing changes.
+- Format release notes exactly with a blank line after the heading, for example:
+
+```
+Release Notes:
+
+- N/A
+```
+
+# Rules Hygiene
+
+These `.rules` files are read by every agent session. Keep them high-signal.
+
+## After any agentic session
+If you discover a non-obvious pattern that would help future sessions, include a **"Suggested .rules additions"** heading in your PR description with the proposed text. Do **not** edit `.rules` inline during normal feature/fix work. Reviewers decide what gets merged.
+
+## High bar for new rules
+Editing or clarifying existing rules is always welcome. New rules must meet **all three** criteria:
+1. **Non-obvious** — someone familiar with the codebase would still get it wrong without the rule.
+2. **Repeatedly encountered** — it came up more than once (multiple hits in one session counts).
+3. **Specific enough to act on** — a concrete instruction, not a vague principle.
+
+Rules that apply to a single module belong in that module's own `.rules` file, not the repo root.
+
+## What NOT to put in `.rules`
+Avoid architectural descriptions of a crate (module layout, data flow, key types). These go stale fast and the agent can gather them by reading the code. Rules should be **traps to avoid**, not **maps to follow**.
+
+## No drive-by additions
+Rules emerge from validated patterns, not one-off observations. The workflow is:
+1. Agent notes a pattern during a session.
+2. Team validates the pattern in code review.
+3. A dedicated commit adds the rule with context on *why* it exists.
+
+# Response Compression
+
+Use terse responses by default when technical accuracy would remain intact.
+
+- Always ON unless the user asks for more detail
+- Lead with the answer, fix, or finding
+- Remove filler, pleasantries, and hedging unless they materially improve trust or accuracy
+- Keep all technical substance exact: constraints, caveats, commands, paths, identifiers, versions, and next steps
+- Fragments are acceptable when clear
+- Prefer short familiar words and standard abbreviations when unambiguous
+- Avoid restating the prompt, repeating context, or explaining the obvious
+- Prefer this pattern when it fits: `<thing> <action> <reason>. <next step>`
+- For reviews and findings, prefer: `<location>: <issue>. <fix>`
+- Keep code, commands, paths, URLs, version numbers, and other literals unchanged
+- Do not drift back toward verbose prose over time
+- If brevity would hide uncertainty, risk, safety constraints, or important tradeoffs, keep the extra words
+- Prefer `bash` tool for running `uv` commands over explaining them
+
+# Available Tools
+
+Project tools live in `scripts/`. Run them directly.
+
+- `memlog <message>` — append a timestamped entry to `MEMORY_LOG.md`
+- `review-branch [issue]` — review committed changes on the current branch
+- `review-code` — review uncommitted working-tree changes
+- `gh-issue <issue>` — diagnose a GitHub issue and produce a resolution plan (issue number or URL)
+- `simplify-code [scope]` — simplify code while preserving behavior (defaults to uncommitted changes; pass a file, directory, symbol, or plain-language scope to target existing code)

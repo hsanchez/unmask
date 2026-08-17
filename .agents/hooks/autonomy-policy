@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""Translate dotagents autonomy levels into provider hook decisions."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import runpy
+import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, cast
+
+sys.dont_write_bytecode = True
+
+DangerousCommandReason = Callable[[str], str | None]
+
+
+def _load_dangerous_command_reason() -> tuple[DangerousCommandReason | None, str]:
+  classifier_path = Path(__file__).with_name("dangerous_commands.py")
+  try:
+    namespace = runpy.run_path(str(classifier_path))
+    classifier = namespace["dangerous_command_reason"]
+    if not callable(classifier):
+      raise TypeError("dangerous_command_reason is not callable")
+  except Exception as error:
+    # Hook policy must return an explicit denial even when the managed classifier
+    # is missing, stale, or otherwise unable to load.
+    return None, str(error)
+  return cast(DangerousCommandReason, classifier), ""
+
+
+dangerous_command_reason, CLASSIFIER_LOAD_ERROR = _load_dangerous_command_reason()
+
+AUTONOMY_LEVELS: frozenset[str] = frozenset({"assist", "supervised", "scoped"})
+PROVIDERS: frozenset[str] = frozenset({"agy", "copilot"})
+
+READ_ONLY_TOOLS: dict[str, frozenset[str]] = {
+  "agy": frozenset(
+    {
+      "code_search",
+      "find_by_name",
+      "grep_search",
+      "list_dir",
+      "list_permissions",
+      "read_url_content",
+      "search_web",
+      "view_file",
+    }
+  ),
+  "copilot": frozenset(
+    {
+      "glob",
+      "grep",
+      "read",
+      "rg",
+      "view",
+      "web_fetch",
+      "web_search",
+    }
+  ),
+}
+
+EDIT_TOOLS: dict[str, frozenset[str]] = {
+  "agy": frozenset(
+    {
+      "multi_replace_file_content",
+      "replace_file_content",
+      "write_to_file",
+    }
+  ),
+  "copilot": frozenset(
+    {
+      "apply_patch",
+      "create",
+      "edit",
+      "str_replace_editor",
+      "write",
+    }
+  ),
+}
+
+SHELL_TOOLS: dict[str, frozenset[str]] = {
+  "agy": frozenset({"run_command"}),
+  "copilot": frozenset(
+    {"bash", "powershell", "shell", "write_bash", "write_powershell"}
+  ),
+}
+
+
+@dataclass(frozen=True)
+class ToolCall:
+  name: str
+  arguments: dict[str, Any]
+
+
+COPILOT_TOOL_ALIASES: dict[str, str] = {
+  "bash": "bash",
+  "edit": "edit",
+  "glob": "glob",
+  "grep": "grep",
+  "read": "view",
+  "webfetch": "web_fetch",
+  "websearch": "web_search",
+  "write": "create",
+}
+
+
+def _parse_arguments(value: Any) -> dict[str, Any]:
+  if isinstance(value, dict):
+    return value
+  if isinstance(value, str):
+    parsed = json.loads(value)
+    if isinstance(parsed, dict):
+      return parsed
+  raise ValueError("tool arguments must be an object or a JSON-encoded object")
+
+
+def _extract_tool_call(payload: dict[str, Any], provider: str) -> ToolCall:
+  if provider == "copilot":
+    name = payload.get("toolName", payload.get("tool_name"))
+    arguments = _parse_arguments(payload.get("toolArgs", payload.get("tool_input", {})))
+  elif provider == "agy":
+    raw_tool_call = payload.get("toolCall")
+    if not isinstance(raw_tool_call, dict):
+      raise ValueError("toolCall must be an object")
+    name = raw_tool_call.get("name")
+    arguments = _parse_arguments(raw_tool_call.get("args", {}))
+  else:
+    raise ValueError(f"unsupported provider: {provider}")
+
+  if not isinstance(name, str) or not name.strip():
+    raise ValueError("tool name must be a non-empty string")
+  normalized_name = name.casefold()
+  if provider == "copilot":
+    normalized_name = COPILOT_TOOL_ALIASES.get(normalized_name, normalized_name)
+  return ToolCall(name=normalized_name, arguments=arguments)
+
+
+def _extract_command(arguments: dict[str, Any]) -> str:
+  for key in ("command", "CommandLine", "commandLine", "input"):
+    command = arguments.get(key)
+    if isinstance(command, str) and command:
+      return command
+  return ""
+
+
+def _render_decision(provider: str, decision: str, reason: str) -> dict[str, object]:
+  if provider == "copilot":
+    return {
+      "permissionDecision": decision,
+      "permissionDecisionReason": reason,
+    }
+  return {"decision": decision, "reason": reason}
+
+
+def _deny(provider: str, reason: str) -> dict[str, object]:
+  return _render_decision(provider, "deny", reason)
+
+
+def _allow(provider: str, reason: str) -> dict[str, object]:
+  return _render_decision(provider, "allow", reason)
+
+
+def _edit_target(arguments: dict[str, Any]) -> str:
+  for key in (
+    "TargetFile",
+    "targetFile",
+    "filePath",
+    "file_path",
+    "path",
+    "AbsolutePath",
+  ):
+    target = arguments.get(key)
+    if isinstance(target, str) and target:
+      return target
+  return ""
+
+
+def _resolved_target_within(target: str, roots: list[str]) -> Path | None:
+  if not target or not roots:
+    return None
+  target_path = Path(target)
+  if not target_path.is_absolute():
+    target_path = Path(roots[0]) / target_path
+  resolved_target = target_path.resolve()
+  for root in roots:
+    if resolved_target.is_relative_to(Path(root).resolve()):
+      return resolved_target
+  return None
+
+
+def _copilot_edit_is_scoped(payload: dict[str, Any], arguments: dict[str, Any]) -> bool:
+  working_directory = payload.get("cwd")
+  if not isinstance(working_directory, str) or not working_directory:
+    return False
+  return (
+    _resolved_target_within(_edit_target(arguments), [working_directory]) is not None
+  )
+
+
+def _apply_patch_targets(patch: str) -> list[str]:
+  lines = patch.splitlines()
+  if len(lines) < 3 or lines[0] != "*** Begin Patch" or lines[-1] != "*** End Patch":
+    return []
+
+  targets: list[str] = []
+  prefixes = ("*** Add File: ", "*** Delete File: ", "*** Update File: ", "*** Move to: ")
+  for line in lines[1:-1]:
+    for prefix in prefixes:
+      if line.startswith(prefix):
+        target = line.removeprefix(prefix)
+        if not target:
+          return []
+        targets.append(target)
+        break
+  return targets
+
+
+def _copilot_apply_patch_is_scoped(
+  payload: dict[str, Any], arguments: dict[str, Any]
+) -> bool:
+  working_directory = payload.get("cwd")
+  patch = arguments.get("patch")
+  if (
+    not isinstance(working_directory, str)
+    or not working_directory
+    or not isinstance(patch, str)
+  ):
+    return False
+  targets = _apply_patch_targets(patch)
+  return bool(targets) and all(
+    _resolved_target_within(target, [working_directory]) is not None
+    for target in targets
+  )
+
+
+def _agy_edit_is_scoped(payload: dict[str, Any], arguments: dict[str, Any]) -> bool:
+  raw_workspace_paths = payload.get("workspacePaths")
+  if not isinstance(raw_workspace_paths, list):
+    return False
+  workspace_paths = [path for path in raw_workspace_paths if isinstance(path, str)]
+  target = _resolved_target_within(_edit_target(arguments), workspace_paths)
+  return target is not None
+
+
+def decide(payload: dict[str, Any], provider: str, level: str) -> dict[str, object]:
+  """Return a provider-specific hook decision, or an empty default decision."""
+  if provider not in PROVIDERS:
+    return _deny(provider, f"dotagents autonomy: unsupported provider {provider!r}")
+  if level not in AUTONOMY_LEVELS:
+    return _deny(provider, f"dotagents autonomy: unsupported level {level!r}")
+  if dangerous_command_reason is None:
+    return _deny(
+      provider,
+      f"dotagents autonomy: dangerous-command classifier unavailable "
+      f"({CLASSIFIER_LOAD_ERROR})",
+    )
+
+  try:
+    tool_call = _extract_tool_call(payload, provider)
+  except (json.JSONDecodeError, ValueError) as error:
+    return _deny(provider, f"dotagents autonomy: malformed hook payload ({error})")
+
+  if tool_call.name in SHELL_TOOLS[provider]:
+    command = _extract_command(tool_call.arguments)
+    if not command:
+      return _deny(provider, "dotagents autonomy: shell command is missing")
+    dangerous_reason = dangerous_command_reason(command)
+    if dangerous_reason:
+      return _deny(provider, f"dotagents autonomy: {dangerous_reason}")
+
+  if level == "assist":
+    if tool_call.name in READ_ONLY_TOOLS[provider]:
+      return _allow(provider, "dotagents assist: read-only tool")
+    return _deny(provider, f"dotagents assist: {tool_call.name} is not read-only")
+
+  if (
+    level == "scoped"
+    and provider == "agy"
+    and tool_call.name in READ_ONLY_TOOLS[provider]
+  ):
+    return _allow(provider, "dotagents scoped: read-only tool")
+
+  if level == "scoped" and tool_call.name in EDIT_TOOLS[provider]:
+    if provider == "agy":
+      if not _agy_edit_is_scoped(payload, tool_call.arguments):
+        return _deny(
+          provider,
+          "dotagents scoped: edit target is missing or outside the workspace",
+        )
+      return _allow(provider, "dotagents scoped: repository edit")
+    if tool_call.name == "apply_patch":
+      if _copilot_apply_patch_is_scoped(payload, tool_call.arguments):
+        return _allow(provider, "dotagents scoped: repository patch")
+      return {}
+    if _copilot_edit_is_scoped(payload, tool_call.arguments):
+      return _allow(provider, "dotagents scoped: repository edit")
+    return {}
+
+  if provider == "agy":
+    if level == "scoped":
+      return _deny(provider, f"dotagents scoped: {tool_call.name} is outside edit scope")
+    return _render_decision(
+      provider,
+      "ask",
+      f"dotagents {level}: use the provider permission flow",
+    )
+  return {}
+
+
+def _parse_cli(arguments: list[str]) -> argparse.Namespace:
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--provider", required=True)
+  parser.add_argument("--level", required=True)
+  return parser.parse_args(arguments)
+
+
+def main(arguments: list[str] | None = None) -> int:
+  options = _parse_cli(sys.argv[1:] if arguments is None else arguments)
+  try:
+    payload = json.load(sys.stdin)
+  except (json.JSONDecodeError, ValueError) as error:
+    print(
+      json.dumps(
+        _deny(
+          options.provider,
+          f"dotagents autonomy: cannot parse hook payload ({error})",
+        )
+      )
+    )
+    return 0
+
+  if not isinstance(payload, dict):
+    decision = _deny(options.provider, "dotagents autonomy: hook payload must be an object")
+  else:
+    decision = decide(payload, options.provider, options.level)
+  print(json.dumps(decision))
+  return 0
+
+
+if __name__ == "__main__":
+  sys.exit(main())

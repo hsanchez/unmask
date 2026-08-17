@@ -1,0 +1,455 @@
+#!/usr/bin/env nu
+
+# Launch multiple external model CLIs against the same council brief and collect
+# their reports.
+#
+# This script is intentionally an execution primitive:
+# - it does not synthesize reports
+# - it does not decide which report is best
+# - it only launches agents, captures outputs, and writes a manifest
+
+const _COPILOT_MODELS = {
+  copilot-claude: "claude-sonnet"
+  copilot-gpt: "gpt-5.5"
+  copilot-gemini: "gemini-3.5-flash"
+}
+
+def main [
+  --brief: string
+  ...agents: string
+] {
+  if not ($brief | path exists) {
+    print $"Brief file not found: ($brief)"
+    exit 1
+  }
+
+  if (($agents | length) < 1) {
+    print "At least one agent spec is required."
+    print "Usage: run-agents --brief <file> backend:perspective ..."
+    exit 1
+  }
+
+  let parsed_agents = ($agents | each {|spec| parse_agent_spec $spec })
+  let backends = ($parsed_agents | each {|agent| $agent.backend } | uniq)
+
+  # Collect both preflight results before exiting, so a broken `claude` and a
+  # broken `gh` are both reported in one run instead of one at a time.
+  let claude_auth = (preflight_claude_auth $backends)
+  let gh_auth_error = (preflight_gh_auth $backends)
+  let preflight_errors = (
+    [$claude_auth.error $gh_auth_error] | where {|error| not ($error | is-empty) }
+  )
+  if ($preflight_errors | length) > 0 {
+    for error in $preflight_errors {
+      print $error
+    }
+    exit 1
+  }
+  let claude_auth_mode = $claude_auth.auth_mode
+
+  mkdir .scratch
+
+  let output_dir = (mktemp -d --tmpdir-path ".scratch" "council-outputs.XXXXXX")
+  let manifest = $"($output_dir)/manifest.tsv"
+  let failures = $"($output_dir)/failures.tsv"
+
+  touch $manifest
+  touch $failures
+
+  print $"Council output dir: ($output_dir)"
+
+  mut index = 1
+
+  for parsed in $parsed_agents {
+    let backend = $parsed.backend
+    let perspective = $parsed.perspective
+    let output_file = $"($output_dir)/agent-output-($index | into string | fill --alignment right --character '0' --width 2).md"
+
+    let prompt = (build_prompt $brief $backend $perspective)
+
+    print $"Launching ($backend) as ($perspective) → ($output_file)"
+
+    let result = (run_backend $backend $prompt $output_file $claude_auth_mode)
+
+    if $result.success {
+      $"($backend)\t($perspective)\t($output_file)\n" | save --append $manifest
+    } else {
+      $"($backend)\t($perspective)\t($result.error)\n" | save --append $failures
+    }
+
+    $index = $index + 1
+  }
+
+  print ""
+  print "Council run complete."
+  print $"Manifest: ($manifest)"
+  print $"Failures: ($failures)"
+  print $"Outputs:  ($output_dir)"
+}
+
+def parse_agent_spec [spec: string] {
+  let parts = ($spec | split row ":")
+
+  if (($parts | length) != 2) {
+    print $"Invalid agent spec: ($spec)"
+    print "Expected format: backend:perspective"
+    print "Example: claude:architecture"
+    exit 1
+  }
+
+  {
+    backend: ($parts | get 0),
+    perspective: ($parts | get 1)
+  }
+}
+
+# Checked once up front, before launching any persona, so an auth problem is
+# reported immediately instead of after up to 600s per persona timing out.
+# Returns a result record instead of exiting directly, so the caller can run
+# preflight_gh_auth too and report both failures in one pass.
+def preflight_claude_auth [backends: list<string>] {
+  if not ("claude" in $backends) {
+    return { auth_mode: "unused", error: "" }
+  }
+
+  let status = (claude_auth_status)
+
+  if $status == "logged_in" {
+    return { auth_mode: "login", error: "" }
+  }
+
+  if $status == "unknown" {
+    return {
+      auth_mode: "",
+      error: "could not determine claude auth status (claude auth status --json did not return a usable result). Run `claude auth status` to diagnose, or run `claude login`."
+    }
+  }
+
+  # status == "not_logged_in", confirmed by a parsed response. Exit code alone
+  # is ambiguous between this and a real failure — a status-check failure
+  # must not silently fall through to an ambient ANTHROPIC_API_KEY.
+  let api_key = ($env.ANTHROPIC_API_KEY? | default "")
+  if ($api_key | is-not-empty) {
+    return { auth_mode: "api-key", error: "" }
+  }
+
+  {
+    auth_mode: "",
+    error: "claude is not logged in and ANTHROPIC_API_KEY is not set. Run `claude login`, or export ANTHROPIC_API_KEY, then retry."
+  }
+}
+
+def preflight_gh_auth [backends: list<string>] {
+  let copilot_requested = ($backends | any {|backend| $backend in ($_COPILOT_MODELS | columns) })
+  if not $copilot_requested {
+    return ""
+  }
+
+  if not (gh_auth_status) {
+    return "gh is not authenticated. Run `gh auth login`, then retry."
+  }
+
+  ""
+}
+
+# `claude auth status --json` exits nonzero even for a genuine, confirmed
+# "not logged in" (still valid JSON on stdout), so exit code alone can't
+# distinguish that from a real failure (crash, malformed output, missing
+# binary). Parse stdout first; only trust "not logged in" when that parse
+# succeeds.
+def claude_auth_status [] {
+  try {
+    let result = (env -u ANTHROPIC_API_KEY claude auth status --json | complete)
+    let parsed = ($result.stdout | from json)
+    if ($parsed.loggedIn? | default false) {
+      "logged_in"
+    } else {
+      "not_logged_in"
+    }
+  } catch {
+    "unknown"
+  }
+}
+
+def gh_auth_status [] {
+  try {
+    (gh auth status | complete).exit_code == 0
+  } catch {
+    false
+  }
+}
+
+def build_prompt [
+  brief_file: string
+  backend: string
+  perspective: string
+] {
+  let brief = (open --raw $brief_file | into string)
+
+  $"
+# Council Member Brief
+
+You are one member of a model-diverse technical council.
+
+## Your Assigned Perspective
+
+($perspective)
+
+## Your Task
+
+Investigate the council question independently from your assigned perspective.
+
+Do not assume other council members agree with you.
+Do not try to predict consensus.
+Do not write code unless the brief explicitly permits implementation work.
+
+Return a structured report.
+
+## Required Report Format
+
+# Council Report
+
+## Perspective
+
+($perspective)
+
+## Evidence inspected
+
+- [Files, symbols, docs, logs, commands, or artifacts inspected]
+
+## Current behavior or current implementation
+
+[What exists today.]
+
+## Alternative or hypothesis evaluated
+
+[What you evaluated.]
+
+## Findings
+
+[Your core analysis.]
+
+## Risks and edge cases
+
+- [Risk]
+- [Risk]
+
+## Implementation and testing cost
+
+[Cost, complexity, and testability.]
+
+## Recommendation
+
+[Keep current approach / pursue alternative / hybrid.]
+
+## Confidence and unknowns
+
+[Confidence level and material unknowns.]
+
+## Shared Council Brief
+
+($brief)
+" | str trim
+}
+
+def run_backend [
+  backend: string
+  prompt: string
+  output_file: string
+  claude_auth_mode: string
+] {
+  if ($backend in ($_COPILOT_MODELS | columns)) {
+    return (run_copilot ($_COPILOT_MODELS | get $backend) $prompt $output_file)
+  }
+
+  match $backend {
+    "claude" => {
+      run_claude $prompt $output_file $claude_auth_mode
+    }
+    "codex" => {
+      run_codex $prompt $output_file
+    }
+    "agy" => {
+      run_agy $prompt $output_file
+    }
+    _ => {
+      {
+        success: false,
+        error: $"unsupported backend: ($backend)"
+      }
+    }
+  }
+}
+
+def run_claude [
+  prompt: string
+  output_file: string
+  auth_mode: string
+] {
+  # An inherited ANTHROPIC_API_KEY otherwise takes precedence over login auth.
+  # preflight_claude_auth already confirmed a login session exists in this case.
+  if $auth_mode == "login" and ("ANTHROPIC_API_KEY" in $env) {
+    hide-env ANTHROPIC_API_KEY
+  }
+
+  run_timed_backend $prompt $output_file "claude" [
+    "--print"
+    "--no-session-persistence"
+    "--output-format"
+    "text"
+    "--permission-mode"
+    "plan"
+  ]
+}
+
+def run_codex [
+  prompt: string
+  output_file: string
+] {
+  let prompt_file = (mktemp --tmpdir-path ".scratch" "council-prompt.XXXXXX")
+  $prompt | save --force $prompt_file
+
+  try {
+    open --raw $prompt_file | codex exec --sandbox read-only --ephemeral -o $output_file -
+    rm -f $prompt_file
+    { success: true, error: "" }
+  } catch {|err|
+    rm -f $prompt_file
+    { success: false, error: ($err.msg | default "codex failed") }
+  }
+}
+
+def run_agy [
+  prompt: string
+  output_file: string
+] {
+  let log_file = ($output_file | path dirname | path join "agy.log")
+  # agy takes the prompt as a positional argument after --print (see the
+  # argument-order note in the Error Handling table). Do not also pipe it
+  # over stdin — duplicate delivery of the same untrusted prompt through two
+  # channels risks confusing agy's argument parsing.
+  run_timed_backend "" $output_file "agy" [
+    "--sandbox"
+    "--print"
+    $prompt
+    "--print-timeout"
+    $"(council_timeout_seconds)s"
+    "--log-file"
+    $log_file
+  ]
+}
+
+def council_timeout_seconds [] {
+  let configured = ($env.COUNCIL_AGENT_TIMEOUT_SECONDS? | default "600")
+  try {
+    let seconds = ($configured | into int)
+    if $seconds < 1 {
+      600
+    } else {
+      $seconds
+    }
+  } catch {
+    600
+  }
+}
+
+def timeout_executable [] {
+  let configured = ($env.COUNCIL_TIMEOUT_COMMAND? | default "")
+  if ($configured | is-not-empty) {
+    return $configured
+  }
+  if ((which timeout | length) > 0) {
+    return "timeout"
+  }
+  if ((which gtimeout | length) > 0) {
+    return "gtimeout"
+  }
+  ""
+}
+
+def run_timed_backend [
+  stdin_content: string
+  output_file: string
+  backend: string
+  arguments: list<string>
+] {
+  let timeout_command = (timeout_executable)
+  if ($timeout_command | is-empty) {
+    return {
+      success: false,
+      error: "no timeout command found; install timeout/gtimeout or set COUNCIL_TIMEOUT_COMMAND"
+    }
+  }
+
+  let timeout_seconds = (council_timeout_seconds | into string)
+  let command_arguments = [
+    "--signal=TERM"
+    "--kill-after=10s"
+    $timeout_seconds
+    $backend
+    ...$arguments
+  ]
+  let completed = (
+    $stdin_content
+    | run-external $timeout_command ...$command_arguments
+    | complete
+  )
+  if $completed.exit_code == 0 {
+    try {
+      $completed.stdout | save --force $output_file
+      return { success: true, error: "" }
+    } catch {|err|
+      return {
+        success: false,
+        error: ($"could not write ($output_file): " + ($err.msg | default "write failed"))
+      }
+    }
+  }
+
+  let detail = ($completed.stderr | str trim)
+  let error = if $completed.exit_code == 124 {
+    $"($backend) timed out after ($timeout_seconds)s"
+  } else if ($detail | is-empty) {
+    $"($backend) exited with status ($completed.exit_code)"
+  } else {
+    $"($backend) exited with status ($completed.exit_code): ($detail)"
+  }
+  { success: false, error: $error }
+}
+
+def calculate_copilot_prompt_limit [] {
+  try {
+    let arg_max = (getconf ARG_MAX | str trim | into int)
+
+    if $arg_max <= 0 {
+      200000
+    } else {
+      [65535, ($arg_max / 2 | math floor)] | math max
+    }
+  } catch {
+    200000
+  }
+}
+
+def run_copilot [
+  model: string
+  prompt: string
+  output_file: string
+] {
+  let prompt_limit = (calculate_copilot_prompt_limit)
+  let prompt_bytes = ($prompt | encode utf-8 | bytes length)
+
+  if $prompt_bytes > $prompt_limit {
+    return {
+      success: false,
+      error: $"gh copilot prompt is too large: ($prompt_bytes) UTF-8 bytes exceeds limit ($prompt_limit)"
+    }
+  }
+
+  try {
+    gh copilot -- --model $model --prompt $prompt --silent | save --force $output_file
+    { success: true, error: "" }
+  } catch {|err|
+    { success: false, error: ($err.msg | default $"gh copilot failed for model ($model)") }
+  }
+}

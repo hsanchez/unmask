@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "python3 .github/hooks/dotagents-autonomy-policy --provider copilot --level supervised",
+        "matcher": "bash|powershell|write_bash|write_powershell",
+        "timeoutSec": 10
+      }
+    ]
+  }
+}

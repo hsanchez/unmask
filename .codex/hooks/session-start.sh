@@ -1,0 +1,1 @@
+../../.agents/providers/codex/hooks/session-start.sh

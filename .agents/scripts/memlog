@@ -1,0 +1,28 @@
+#!/usr/bin/env nu
+
+# Append a timestamped entry to MEMORY_LOG.md.
+# Provides the current local time so the agent does not need clock access.
+#
+# Usage: memlog <message>
+# Example: memlog "Refactored compass module, moved scoring to llm_guided.py"
+
+def main [
+  ...message: string  # Entry content
+] {
+  let messageText = $message | str join " " | str trim
+
+  if ($messageText | is-empty) {
+    error make { msg: "message is required" }
+  }
+
+  let timestamp = (date now | format date "%Y-%m-%d %H:%M")
+  let entry = $"($timestamp) — ($messageText)"
+  let log_path = "MEMORY_LOG.md"
+
+  if not ($log_path | path exists) {
+    error make { msg: $"($log_path) not found. Are you in the repo root?" }
+  }
+
+  $"($entry)\n" | save --append $log_path
+  print $"Logged: ($entry)"
+}

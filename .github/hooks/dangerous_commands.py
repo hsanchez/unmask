@@ -1,0 +1,1 @@
+../../.agents/hooks/dangerous_commands.py

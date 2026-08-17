@@ -1,0 +1,27 @@
+{
+  "context": {
+    "fileName": ["GEMINI.md", "AGENTS.md", ".rules"]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "name": "dotagents-discovery",
+            "type": "command",
+            "command": "$GEMINI_PROJECT_DIR/.gemini/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "general": {
+    "checkpointing": {
+      "enabled": true
+    },
+    "plan": {
+      "enabled": true
+    }
+  }
+}

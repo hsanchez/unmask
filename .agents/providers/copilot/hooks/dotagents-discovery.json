@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "prompt",
+        "prompt": "Read .agents/skills/dotagents-discovery/SKILL.md before selecting a task skill. Use only skills materialized under .agents/skills/. For readiness requests such as 'are you on?', invoke startup."
+      }
+    ]
+  }
+}
