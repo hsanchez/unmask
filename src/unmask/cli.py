@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Literal, cast
 
 import yaml
+from dotenv import dotenv_values, find_dotenv
 
 from .analyzer import SymbolicAnalyzer
-from .backend import GeminiBackend
+from .backend import JudgeBackend, create_backend
 from .config import TargetConfig, load_guardrail
 from .diagnosis import (
   ConversationIncident,
@@ -37,15 +38,35 @@ from .visualization import (
 
 type SpecificationKind = Literal["natural_language", "regex"]
 
+_DEFAULT_MODELS: dict[str, str] = {
+  "gemini": "gemini-2.5-flash",
+  "openai": "gpt-4o",
+  "anthropic": "claude-opus-4-5",
+}
+
+_ALLOWED_ENV_VARS: frozenset[str] = frozenset(
+  {
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_GENAI_USE_ENTERPRISE",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+  }
+)
+
 
 @dataclass(frozen=True)
 class ScanArguments:
   specification: Path
   taxonomy: Path | None
   output: Path
+  provider: str
   project: str | None
   location: str
-  model: str
+  model: str | None
   thinking_budget: int
 
 
@@ -88,6 +109,16 @@ def _specification_kind(path: Path) -> SpecificationKind:
   )
 
 
+def _add_env_file_argument(parser: argparse.ArgumentParser) -> None:
+  _ = parser.add_argument(
+    "--env-file",
+    type=Path,
+    default=None,
+    help="load environment variables from this file instead of "
+    + "auto-discovering .env from the current directory",
+  )
+
+
 def _non_negative_integer(value: str) -> int:
   try:
     parsed: int = int(value)
@@ -109,7 +140,7 @@ def _run_natural_language_scan(
   taxonomy: object | None = (
     _load_yaml(taxonomy_path) if taxonomy_path is not None else None
   )
-  backend: GeminiBackend = GeminiBackend(target)
+  backend: JudgeBackend = create_backend(target)
   model: SymbolicModel = SemanticExtractor(backend).extract(guardrail, taxonomy)
   findings: list[Finding] = SymbolicAnalyzer(model, guardrail).analyze()
 
@@ -315,9 +346,16 @@ def _build_parser() -> argparse.ArgumentParser:
     help="artifact directory (default: output/scan)",
   )
   _ = scan_parser.add_argument(
+    "--provider",
+    choices=sorted(_DEFAULT_MODELS),
+    default="gemini",
+    help="judge backend for natural-language scans (default: gemini)",
+  )
+  _ = scan_parser.add_argument(
     "--project",
     default=os.getenv("GOOGLE_CLOUD_PROJECT"),
-    help="Google Cloud project (default: GOOGLE_CLOUD_PROJECT)",
+    help="Google Cloud project; Vertex AI mode for the gemini provider "
+    + "(default: GOOGLE_CLOUD_PROJECT, or the Gemini Developer API if unset)",
   )
   _ = scan_parser.add_argument(
     "--location",
@@ -326,8 +364,8 @@ def _build_parser() -> argparse.ArgumentParser:
   )
   _ = scan_parser.add_argument(
     "--model",
-    default="gemini-2.5-flash",
-    help="judge model (default: gemini-2.5-flash)",
+    default=None,
+    help="judge model (default: provider-specific)",
   )
   _ = scan_parser.add_argument(
     "--thinking-budget",
@@ -335,6 +373,7 @@ def _build_parser() -> argparse.ArgumentParser:
     default=128,
     help="judge thinking budget (default: 128)",
   )
+  _add_env_file_argument(scan_parser)
 
   diagnose_parser = subparsers.add_parser(
     "diagnose", help="diagnose reported violations against a regex guardrail"
@@ -355,8 +394,39 @@ def _build_parser() -> argparse.ArgumentParser:
     dest="open_index",
     help="open the generated collection index in a browser",
   )
+  _add_env_file_argument(diagnose_parser)
 
   return parser
+
+
+def _extract_env_file(argv: list[str] | None) -> Path | None:
+  pre_parser = argparse.ArgumentParser(add_help=False)
+  _ = pre_parser.add_argument("--env-file", type=Path, default=None)
+  known, _ = pre_parser.parse_known_args(argv)
+  return cast("Path | None", known.env_file)
+
+
+def _load_environment(env_file: Path | None) -> None:
+  """Load only the credential/project variables `unmask` recognizes from a
+  `.env` file, ignoring every other entry.
+
+  A specification file (e.g. a guardrail YAML) is often processed from a
+  cloned or downloaded repository. Loading a full `.env` from that checkout
+  would let it inject unrelated settings, such as an SDK base-URL override,
+  into the process. Restricting the load to `_ALLOWED_ENV_VARS` closes that
+  path while preserving `.env` convenience for the variables unmask actually
+  reads. Variables already set in the environment take precedence.
+  """
+  resolved_path: str = (
+    str(env_file) if env_file is not None else find_dotenv(usecwd=True)
+  )
+  if not resolved_path:
+    return
+  values: dict[str, str | None] = dotenv_values(resolved_path)
+  for name in _ALLOWED_ENV_VARS:
+    value: str | None = values.get(name)
+    if value is not None and name not in os.environ:
+      os.environ[name] = value
 
 
 def _parse_arguments(argv: list[str] | None) -> CommandArguments:
@@ -367,9 +437,10 @@ def _parse_arguments(argv: list[str] | None) -> CommandArguments:
       specification=cast("Path", values["specification"]),
       taxonomy=cast("Path | None", values["taxonomy"]),
       output=cast("Path", values["output"]),
+      provider=cast("str", values["provider"]),
       project=cast("str | None", values["project"]),
       location=cast("str", values["location"]),
-      model=cast("str", values["model"]),
+      model=cast("str | None", values["model"]),
       thinking_budget=cast("int", values["thinking_budget"]),
     )
   return DiagnoseArguments(
@@ -386,6 +457,7 @@ def main(argv: list[str] | None = None) -> int:
   Raises:
     SystemExit: if argument parsing fails or `--help` is requested, via argparse.
   """
+  _load_environment(_extract_env_file(argv))
   args: CommandArguments = _parse_arguments(argv)
 
   try:
@@ -397,8 +469,9 @@ def main(argv: list[str] | None = None) -> int:
         target=TargetConfig(
           project=args.project,
           location=args.location,
-          judge_model=args.model,
+          judge_model=args.model or _DEFAULT_MODELS[args.provider],
           thinking_budget=args.thinking_budget,
+          provider=args.provider,
         ),
       )
     return _run_diagnose(

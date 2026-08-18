@@ -102,6 +102,10 @@ class TestMainArgumentParsing:
     with pytest.raises(SystemExit):
       _ = main(["scan", str(_write_guardrail(tmp_path)), "--thinking-budget", "-1"])
 
+  def test_rejects_unknown_provider(self, tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+      _ = main(["scan", str(_write_guardrail(tmp_path)), "--provider", "bogus"])
+
   def test_extract_is_not_a_public_command(self) -> None:
     with pytest.raises(SystemExit):
       _ = main(["extract"])
@@ -127,7 +131,7 @@ class TestMainScan:
       del config
       return backend
 
-    monkeypatch.setattr(cli_module, "GeminiBackend", backend_factory)
+    monkeypatch.setattr(cli_module, "create_backend", backend_factory)
     taxonomy_path = write_yaml(
       tmp_path / "taxonomy.yaml",
       {"intent_classes": {"Allowed": {"description": "safe requests"}}},
@@ -176,7 +180,7 @@ class TestMainScan:
 
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "environment-project")
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west1")
-    monkeypatch.setattr(cli_module, "GeminiBackend", backend_factory)
+    monkeypatch.setattr(cli_module, "create_backend", backend_factory)
 
     exit_code = main(
       [
@@ -196,6 +200,32 @@ class TestMainScan:
         thinking_budget=128,
       )
     ]
+
+  def test_selects_provider_and_its_default_model(
+    self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+  ) -> None:
+    captured: list[TargetConfig] = []
+
+    def backend_factory(config: TargetConfig) -> FakeBackend:
+      captured.append(config)
+      return FakeBackend(config)
+
+    monkeypatch.setattr(cli_module, "create_backend", backend_factory)
+
+    exit_code = main(
+      [
+        "scan",
+        str(_write_guardrail(tmp_path)),
+        "--output",
+        str(tmp_path / "output"),
+        "--provider",
+        "openai",
+      ]
+    )
+
+    assert exit_code == 0
+    assert captured[0].provider == "openai"
+    assert captured[0].judge_model == "gpt-4o"
 
   def test_scans_regex_manifest(self, tmp_path: Path) -> None:
     output_directory = tmp_path / "scan-output"

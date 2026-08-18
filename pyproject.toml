@@ -12,6 +12,8 @@ dependencies = [
 
 [project.optional-dependencies]
 gemini = ["google-genai>=1.52"]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.20"]
 
 [project.scripts]
 unmask = "unmask.cli:main"

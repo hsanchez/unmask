@@ -16,17 +16,34 @@ Regex analysis executes the supplied rules against trusted labeled examples or r
 
 Python 3.14 or newer is required.
 
-```bash
-uv sync --extra gemini
-```
-
-Natural-language scanning uses Vertex AI. Set the project before scanning:
+Regex scanning and diagnosis work out of the box. Natural-language scanning needs an LLM
+judge backend, selected with `--provider` (default `gemini`) and installed as an optional
+extra:
 
 ```bash
-export GOOGLE_CLOUD_PROJECT=your-project
+uv sync --extra gemini      # Gemini (Vertex AI or the Gemini Developer API)
+uv sync --extra openai      # OpenAI
+uv sync --extra anthropic   # Anthropic
 ```
 
-`GOOGLE_CLOUD_LOCATION` is optional and defaults to `global`.
+Each provider reads its credentials from the environment. Copy `.env.example` to `.env`
+and fill in the values you need — `unmask` loads it automatically, searching upward from
+the current directory (not from wherever `unmask` itself is installed). Pass `--env-file
+PATH` to `scan`/`diagnose` to load a specific file instead:
+
+```bash
+cp .env.example .env
+```
+
+| Provider | Credentials |
+| --- | --- |
+| `gemini` | `GOOGLE_CLOUD_PROJECT` (+ optional `GOOGLE_CLOUD_LOCATION`, default `global`) for Vertex AI, **or** `GOOGLE_API_KEY`/`GEMINI_API_KEY` for the Gemini Developer API |
+| `openai` | `OPENAI_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
+
+For Gemini, setting `GOOGLE_CLOUD_PROJECT` selects Vertex AI; leaving it unset and setting
+`GOOGLE_API_KEY` instead selects the Gemini Developer API. Credential resolution for both
+modes is handled by the `google-genai` SDK.
 
 ## Commands
 
@@ -50,11 +67,17 @@ Model settings can be overridden directly:
 
 ```bash
 uv run unmask scan examples/guardrail.yaml \
+  --provider gemini \
   --project your-project \
   --location global \
   --model gemini-2.5-flash \
   --thinking-budget 128
 ```
+
+`--provider` selects the judge backend (`gemini`, `openai`, or `anthropic`); `--model`
+defaults to a provider-specific model when not set (`gemini-2.5-flash`, `gpt-4o`, and
+`claude-opus-4-5`, respectively). `--project`, `--location`, and `--thinking-budget` only
+apply to the `gemini` provider.
 
 The same command recognizes a regex manifest through `kind: regex`:
 

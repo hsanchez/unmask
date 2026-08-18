@@ -245,7 +245,7 @@ def test_natural_language_catalog_demonstrates_each_defect(
   tmp_path: Path,
   monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  monkeypatch.setattr(cli_module, "GeminiBackend", CatalogBackend)
+  monkeypatch.setattr(cli_module, "create_backend", CatalogBackend)
   output_directory = tmp_path / "scan"
 
   exit_code = main(

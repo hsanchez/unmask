@@ -96,12 +96,13 @@ def load_guardrail(path: Path) -> Guardrail:
 
 @dataclass(frozen=True)
 class TargetConfig:
-  """The judge model and Vertex AI location used for semantic extraction."""
+  """The judge backend and model used for semantic extraction."""
 
   project: str | None
   location: str
   judge_model: str
   thinking_budget: int | None
+  provider: str = "gemini"
 
 
 @dataclass(frozen=True)
