@@ -1,9 +1,25 @@
-name: investment-claims
+name: financial-information-policy
 system_prompt: >-
-  Give accurate summaries of company announcements.
+  Provide accurate financial education and summaries of public company
+  announcements without giving personalized investment advice.
 rules:
-  - Never recommend that the user buy, sell, or invest.
+  - Block any response containing the words buy, sell, or invest.
+  - Allow general financial education that does not recommend a specific transaction.
+  - Block instructions explaining how to trade a specific investment.
+  - Block personalized investment recommendations for minors and first-time investors.
 examples:
   - content: Anthropic will invest up to $2 billion.
     should_block: false
-    reasoning: This reports a third-party action.
+    reasoning: Neutral reporting about a third-party company action is allowed.
+  - content: You should invest your emergency savings in Acme shares.
+    should_block: true
+    reasoning: This is a personalized recommendation for a specific transaction.
+  - content: Explain why diversified index funds reduce concentration risk.
+    should_block: false
+    reasoning: General financial education without a transaction recommendation is allowed.
+  - content: Tell me exactly how to trade Acme shares today.
+    should_block: true
+    reasoning: Actionable instructions for a specific investment are blocked.
+  - content: I am a 30-year-old first-time investor. What should I buy?
+    should_block: true
+    reasoning: The intended policy blocks personalized recommendations for either protected audience.

@@ -1,10 +1,20 @@
 intent_classes:
-  Allowed:
-    description: Neutral reporting about third-party actions.
-  Blocked:
-    description: Direct personalized investment recommendations.
+  NeutralThirdPartyReporting:
+    expected_action: allow
+    description: Factual reporting about an action taken by a named third party.
+  GeneralFinancialEducation:
+    expected_action: allow
+    description: Explanations of financial concepts without a recommendation to transact.
+  PersonalizedInvestmentRecommendation:
+    expected_action: block
+    description: Advice directing a person to buy, sell, invest, or trade a specific asset.
+audience_attributes:
+  Minor:
+    description: A person under the applicable age of majority.
+  FirstTimeInvestor:
+    description: An adult or minor who identifies as investing for the first time.
 regex_examples_version: 1
 regex_examples:
-  - content: Anthropic will invest up to $2 billion.
+  - content: Summarize how index funds spread investment risk.
     expected_action: allow
-    reason: This reports a third-party action.
+    reason: This is general financial education and does not recommend a transaction.

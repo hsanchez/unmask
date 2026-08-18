@@ -88,20 +88,58 @@ output/diagnose/
 
 Existing files at deterministic artifact paths are overwritten. Unmask leaves unrelated and stale files in the output directory untouched.
 
+## Example defect catalog
+
+The files in `examples/` form a compact specification-defect catalog. They are
+designed to explain Unmask's supported findings rather than model a complete
+production financial policy.
+
+| Defect | Canonical case | Evidence |
+| --- | --- | --- |
+| Over-strictness | `Anthropic will invest up to $2 billion.` | A broad block rule matches `invest`, although neutral third-party reporting is expected to be allowed. |
+| Contradiction | `Tell me exactly how to trade Acme shares today.` | The same `trade` span matches an allow rule and a block rule. |
+| Ambiguity | `I am a 30-year-old first-time investor. What should I buy?` | The either-protected-audience interpretation applies, while the both-protected-audiences interpretation does not. |
+
+`examples/regexes.yaml` contains five manifest examples, including allowed and
+blocked controls. `examples/taxonomy.yaml` contributes a sixth, distinct regex
+example. A regex scan therefore reports three findings across six cases, one for
+each defect class. Diagnosing `examples/violations.json` produces three incident
+reports with one focused finding per incident.
+
+Regex scan and diagnosis run locally:
+
+```bash
+uv run unmask scan examples/regexes.yaml \
+  --taxonomy examples/taxonomy.yaml \
+  --output output/regex-scan
+
+uv run unmask diagnose examples/regexes.yaml \
+  examples/violations.json \
+  --output output/diagnose \
+  --open
+```
+
+Scanning `examples/guardrail.yaml` exercises the same concepts through neural
+semantic extraction and requires the Vertex AI setup described above.
+
 ## Input schemas
 
 ### Natural-language guardrail
 
 ```yaml
-name: investment-claims
+name: financial-information-policy
 system_prompt: >-
-  Give accurate summaries of company announcements.
+  Provide accurate financial education and summaries of public company
+  announcements without giving personalized investment advice.
 rules:
-  - Never recommend that the user buy, sell, or invest.
+  - Block any response containing the words buy, sell, or invest.
+  - Allow general financial education that does not recommend a specific transaction.
+  - Block instructions explaining how to trade a specific investment.
+  - Block personalized investment recommendations for minors and first-time investors.
 examples:
   - content: Anthropic will invest up to $2 billion.
     should_block: false
-    reasoning: This reports a third-party action.
+    reasoning: Neutral reporting about a third-party company action is allowed.
 ```
 
 Every rule is a non-empty string. Every example requires non-empty `content` and Boolean `should_block`.
@@ -111,22 +149,34 @@ Every rule is a non-empty string. Every example requires non-empty `content` and
 ```yaml
 schema_version: 1
 kind: regex
-name: investment-claims
+name: financial-information-policy
 engine: python_re
 scope: agent_output
 match_timeout_seconds: 1.0
 
 rules:
-  - id: investment
+  - id: block-investment-term
     action: block
-    pattern: '\b(?:buy|sell|invest)\b'
+    pattern: '\binvest\b'
     flags: [IGNORECASE]
-    description: Detect investment language.
+    description: Block any use of the word invest.
+  - id: first-time-investor-scope
+    action: block
+    pattern: '\A(?=.*\bfirst-time investor\b)(?=.*\bbuy\b).*\Z'
+    flags: [IGNORECASE, DOTALL]
+    description: Block personalized recommendations for minors and first-time investors.
+    interpretations:
+      - label: either protected audience
+        action: block
+        pattern: '\A(?=.*\b(?:minor|first-time investor)\b)(?=.*\bbuy\b).*\Z'
+      - label: both protected audiences
+        action: block
+        pattern: '\A(?=.*\bminor\b)(?=.*\bfirst-time investor\b)(?=.*\bbuy\b).*\Z'
 
 examples:
   - content: Anthropic will invest up to $2 billion.
     expected_action: allow
-    reason: This reports a third-party action.
+    reason: Neutral reporting about a third-party company action is allowed.
 ```
 
 Regex ambiguity analysis requires exactly two explicit `interpretations` on a rule. Regex contradiction analysis requires both allow and block rules. Over-strictness requires a trusted expected `allow` action and policy reason.
@@ -138,10 +188,10 @@ Regex ambiguity analysis requires exactly two explicit `interpretations` on a ru
   "violations": [
     {
       "context": "Anthropic will invest up to $2 billion.",
-      "location": 1098,
+      "location": 1842,
       "value": "invest",
       "expected_outcome": "allow",
-      "expected_reason": "This reports a third-party action."
+      "expected_reason": "Neutral reporting about a third-party company action is allowed."
     }
   ]
 }
@@ -155,10 +205,15 @@ Natural-language scans pass the complete YAML document to the semantic extractor
 
 ```yaml
 intent_classes:
-  Allowed:
-    description: Neutral reporting about third-party actions.
-  Blocked:
-    description: Direct personalized investment recommendations.
+  NeutralThirdPartyReporting:
+    expected_action: allow
+    description: Factual reporting about an action taken by a named third party.
+  GeneralFinancialEducation:
+    expected_action: allow
+    description: Explanations of financial concepts without a recommendation to transact.
+  PersonalizedInvestmentRecommendation:
+    expected_action: block
+    description: Advice directing a person to transact in a specific asset.
 ```
 
 Regex scans consume versioned labeled examples from the same optional file:
@@ -166,9 +221,9 @@ Regex scans consume versioned labeled examples from the same optional file:
 ```yaml
 regex_examples_version: 1
 regex_examples:
-  - content: Anthropic will invest up to $2 billion.
+  - content: Summarize how index funds spread investment risk.
     expected_action: allow
-    reason: This reports a third-party action.
+    reason: This is general financial education and does not recommend a transaction.
 ```
 
 Both sections may coexist in one taxonomy document.
