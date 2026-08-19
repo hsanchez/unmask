@@ -1,13 +1,17 @@
-from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
 from flask import Flask
+from werkzeug.test import TestResponse
 
 from unmask.webapp import MAX_REQUEST_BYTES, create_app, run_local_server
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
+
+
+def _response_data(response: TestResponse) -> bytes:
+  return response.get_data()
 
 
 @pytest.fixture
@@ -19,33 +23,40 @@ def application() -> Flask:
 
 def test_index_serves_studio_with_security_headers(application: Flask) -> None:
   response = application.test_client().get("/")
+  response_data: bytes = _response_data(response)
 
   assert response.status_code == 200
-  assert b"Local analysis studio" in response.data
-  assert b"Load a file to scan or diagnose" in response.data
-  assert b'id="scan-mode"' in response.data
-  assert b'id="diagnose-mode"' in response.data
-  assert b'id="analyze-button"' in response.data
-  assert response.data.index(b'id="source-name"') < response.data.index(
+  assert b"Local analysis studio" in response_data
+  assert b"Load a file to scan or diagnose" in response_data
+  assert b'id="scan-mode"' in response_data
+  assert b'id="diagnose-mode"' in response_data
+  assert b"Provider:" in response_data
+  assert b'id="provider-select"' in response_data
+  assert b"Model:" in response_data
+  assert b'id="model-input"' in response_data
+  assert b'id="analyze-button"' in response_data
+  assert b'href="/assets/style.css?v=2"' in response_data
+  assert response_data.index(b'id="source-name"') < response_data.index(
     b'id="taxonomy-button"'
   )
-  assert b'id="regex-model-note"' in response.data
+  assert b'id="regex-model-note"' in response_data
   assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
   assert "no-store" in response.headers["Cache-Control"]
 
 
 def test_assets_disable_cache_for_local_development(application: Flask) -> None:
   response = application.test_client().get("/assets/app.js")
+  response_data: bytes = _response_data(response)
 
   assert response.status_code == 200
-  assert b"indexedDB" in response.data
-  assert b"textContent" in response.data
-  assert b"innerHTML" not in response.data
-  assert b"renderEmptyWorkspace()" in response.data
-  assert b"/api/v1/diagnoses" in response.data
+  assert b"indexedDB" in response_data
+  assert b"textContent" in response_data
+  assert b"innerHTML" not in response_data
+  assert b"renderEmptyWorkspace()" in response_data
+  assert b"/api/v1/diagnoses" in response_data
   assert (
     b'elements.providerControl.hidden = isRegex || workflow === "diagnose"'
-    in response.data
+    in response_data
   )
 
 
@@ -148,7 +159,7 @@ def test_regex_diagnosis_runs_without_external_provider(application: Flask) -> N
   assert response.status_code == 200
   assert payload["workflow"] == "diagnose"
   assert payload["specificationKind"] == "regex"
-  assert int(cast("dict[str, object]", payload["summary"])["incidents"]) == 3
+  assert cast("dict[str, object]", payload["summary"])["incidents"] == 3
   assert payload["findings"]
 
 
@@ -189,12 +200,12 @@ def test_rejects_oversized_request(application: Flask) -> None:
 
 
 class FakeServer:
-  server_port = 43123
+  server_port: int = 43123
 
   def __init__(self) -> None:
-    self.served = False
-    self.shutdown_called = False
-    self.closed = False
+    self.served: bool = False
+    self.shutdown_called: bool = False
+    self.closed: bool = False
 
   def serve_forever(self) -> None:
     self.served = True
@@ -223,7 +234,7 @@ def test_local_server_binds_loopback_opens_browser_and_closes() -> None:
   exit_code = run_local_server(
     port=0,
     browser_opener=browser_opener,
-    server_factory=cast("Callable[..., object]", server_factory),
+    server_factory=server_factory,
   )
 
   assert exit_code == 0
@@ -247,7 +258,7 @@ def test_browser_launch_failure_does_not_stop_server(
 
   exit_code = run_local_server(
     browser_opener=browser_opener,
-    server_factory=cast("Callable[..., object]", server_factory),
+    server_factory=server_factory,
   )
 
   assert exit_code == 0

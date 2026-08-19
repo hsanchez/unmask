@@ -7,12 +7,12 @@ import sys
 import webbrowser
 from collections.abc import Callable
 from importlib.resources import files
-from typing import cast
+from typing import Protocol, cast
 
 import yaml
 from flask import Flask, Response, jsonify, render_template, request
 from werkzeug.exceptions import BadRequest, RequestEntityTooLarge, UnsupportedMediaType
-from werkzeug.serving import BaseWSGIServer, make_server
+from werkzeug.serving import make_server
 
 from .config import TargetConfig
 from .service import (
@@ -25,6 +25,16 @@ from .service import (
 
 MAX_REQUEST_BYTES = 1_000_000
 DEFAULT_PORT = 8765
+
+
+class _LocalServer(Protocol):
+  server_port: int
+
+  def serve_forever(self) -> None: ...
+
+  def shutdown(self) -> None: ...
+
+  def server_close(self) -> None: ...
 
 
 def _error(message: str, *, code: str, status: int) -> tuple[Response, int]:
@@ -275,7 +285,7 @@ def run_local_server(
   port: int = DEFAULT_PORT,
   open_browser: bool = True,
   browser_opener: Callable[[str], bool] = webbrowser.open,
-  server_factory: Callable[..., BaseWSGIServer] = make_server,
+  server_factory: Callable[..., _LocalServer] = make_server,
 ) -> int:
   """Run the analysis studio on loopback until interrupted.
 
@@ -283,7 +293,7 @@ def run_local_server(
     OSError: if the server cannot bind to the requested port.
   """
   application: Flask = create_app()
-  server: BaseWSGIServer = server_factory("127.0.0.1", port, application)
+  server: _LocalServer = server_factory("127.0.0.1", port, application)
   actual_port: int = server.server_port
   url: str = f"http://127.0.0.1:{actual_port}/"
   print(f"Unmask studio: {url}")

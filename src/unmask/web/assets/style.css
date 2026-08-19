@@ -155,9 +155,16 @@ button { color: inherit; }
   border-radius: 12px;
   background: var(--panel);
 }
-.analysis-controls label { display: grid; gap: 4px; color: var(--muted); font-size: .68rem; font-weight: 700; }
+.analysis-controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 700;
+}
 .analysis-controls select, .analysis-controls input {
-  min-height: 36px;
+  min-height: 38px;
   padding: 6px 9px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -165,6 +172,7 @@ button { color: inherit; }
   background: white;
 }
 #model-control { flex: 1; max-width: 320px; }
+#model-control input { min-width: 0; flex: 1; }
 .analysis-controls #analyze-button { margin-left: auto; }
 .workflow-toggle { display: flex; gap: 6px; }
 .workflow-toggle .button.active {
