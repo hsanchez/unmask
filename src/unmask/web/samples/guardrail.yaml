@@ -1,0 +1,12 @@
+name: financial-information-policy
+system_prompt: >-
+  Provide accurate financial education without giving personalized investment
+  advice.
+rules:
+  - Block any response containing the words buy, sell, or invest.
+  - Allow general financial education that does not recommend a transaction.
+  - Block instructions explaining how to trade a specific investment.
+examples:
+  - content: Anthropic will invest up to $2 billion.
+    should_block: false
+    reasoning: Neutral reporting about a third-party company action is allowed.

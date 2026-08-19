@@ -47,6 +47,42 @@ modes is handled by the `google-genai` SDK.
 
 ## Commands
 
+### Open the local analysis studio
+
+```bash
+uv run unmask serve
+```
+
+`serve` starts a Flask server on `http://127.0.0.1:8765/` and opens the studio in
+the default browser. It serves bundled HTML, CSS, and plain browser JavaScript; no
+frontend build step or Node runtime is required. Use an available port or keep the
+browser closed when starting the server:
+
+```bash
+uv run unmask serve --port 0
+uv run unmask serve --no-open
+```
+
+`--env-file PATH` selects a credential file using the same allowlisted environment
+loading behavior as the scan commands.
+
+The studio starts empty. Load a `.yaml` or `.yml` specification, or open a bundled
+example, then choose **Scan** or **Diagnose** and select **Analyze**. Imported
+studies and completed results stay in the browser's IndexedDB storage. Rename,
+delete, and clear actions affect that local browser storage only; Unmask does not
+retain uploaded files on the server.
+
+**Scan** runs the same analysis as `unmask scan`. Regex scans run locally.
+Natural-language scans send the specification and optional taxonomy to the selected
+configured model provider. **Diagnose** is available for regex specifications and
+needs a violations JSON file; the bundled regex example includes one. Credentials
+remain in the server process environment and are never sent to or stored by the
+browser.
+
+Source highlighting initially maps findings to complete YAML rule values. Hover,
+focus, or select either a source rule or finding card to reveal its relationships in
+the opposite pane.
+
 ### Scan a specification
 
 ```bash

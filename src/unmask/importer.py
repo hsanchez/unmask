@@ -191,6 +191,20 @@ class PythonRegexImporter:
     raise TypeError(f"unsupported regex expression: {type(expression).__name__}")
 
 
+def load_violations_text(text: str) -> tuple[ImportedViolation, ...]:
+  """Parse violations from JSON text, falling back to a plain-text field format.
+
+  Raises:
+    ValueError: if the text matches neither the JSON nor the text violation shape.
+    TypeError: if the parsed JSON is not an object, or an entry is not an object.
+  """
+  try:
+    raw: object = cast("object", json.loads(text))
+  except json.JSONDecodeError:
+    return _load_text_violations(text)
+  return _load_json_violations(raw)
+
+
 def load_violations(path: str | Path) -> tuple[ImportedViolation, ...]:
   """Load violations from a JSON file, falling back to a plain-text field format.
 
@@ -198,12 +212,7 @@ def load_violations(path: str | Path) -> tuple[ImportedViolation, ...]:
     ValueError: if the file matches neither the JSON nor the text violation shape.
     TypeError: if the parsed JSON is not an object, or an entry is not an object.
   """
-  text: str = Path(path).read_text(encoding="utf-8")
-  try:
-    raw: object = cast("object", json.loads(text))
-  except json.JSONDecodeError:
-    return _load_text_violations(text)
-  return _load_json_violations(raw)
+  return load_violations_text(Path(path).read_text(encoding="utf-8"))
 
 
 def _load_json_violations(raw: object) -> tuple[ImportedViolation, ...]:

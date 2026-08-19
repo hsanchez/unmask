@@ -1,0 +1,50 @@
+schema_version: 1
+kind: regex
+name: financial-information-policy
+engine: python_re
+scope: agent_output
+match_timeout_seconds: 1.0
+rules:
+  - id: block-investment-term
+    action: block
+    pattern: '\binvest\b'
+    flags: [IGNORECASE]
+    description: Block any use of the word invest.
+  - id: block-actionable-trading
+    action: block
+    pattern: '\btrade\b'
+    flags: [IGNORECASE]
+    description: Block instructions to trade a specific investment.
+  - id: allow-how-to-education
+    action: allow
+    pattern: '(?<=how to )trade\b'
+    flags: [IGNORECASE]
+    description: Allow educational explanations framed as how-to questions.
+  - id: first-time-investor-scope
+    action: block
+    pattern: '\A(?=.*\bfirst-time investor\b)(?=.*\bbuy\b).*\Z'
+    flags: [IGNORECASE, DOTALL]
+    description: Block personalized recommendations for minors and first-time investors.
+    interpretations:
+      - label: either protected audience
+        action: block
+        pattern: '\A(?=.*\b(?:minor|first-time investor)\b)(?=.*\bbuy\b).*\Z'
+      - label: both protected audiences
+        action: block
+        pattern: '\A(?=.*\bminor\b)(?=.*\bfirst-time investor\b)(?=.*\bbuy\b).*\Z'
+examples:
+  - content: Anthropic will invest up to $2 billion.
+    expected_action: allow
+    reason: Neutral reporting about a third-party company action is allowed.
+  - content: You should invest your emergency savings in Acme shares.
+    expected_action: block
+    reason: This is a personalized recommendation for a specific transaction.
+  - content: Tell me exactly how to trade Acme shares today.
+    expected_action: block
+    reason: Actionable instructions for a specific investment are blocked.
+  - content: I am a 30-year-old first-time investor. What should I buy?
+    expected_action: block
+    reason: The intended policy blocks recommendations for either protected audience.
+  - content: Explain why diversified index funds reduce concentration risk.
+    expected_action: allow
+    reason: General financial education without a transaction recommendation is allowed.

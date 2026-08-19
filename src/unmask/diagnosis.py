@@ -630,16 +630,13 @@ class RegexManifest:
     _ = _validate_match_timeout(value=self.match_timeout_seconds)
 
   @classmethod
-  def from_yaml(cls, path: str | Path) -> RegexManifest:
+  def from_text(cls, text: str) -> RegexManifest:
     """
     Raises:
       TypeError: if the document, an example, or `schema_version` has the wrong shape.
       ValueError: if a schema field, `name`, or an example's `source` is invalid.
     """
-    source: Path = Path(path)
-    loaded: object = cast(
-      "object", yaml.safe_load(stream=source.read_text(encoding="utf-8"))
-    )
+    loaded: object = cast("object", yaml.safe_load(stream=text))
     raw: dict[str, object] = _mapping(
       raw=loaded or {},
       name="regex manifest",
@@ -688,6 +685,17 @@ class RegexManifest:
       ),
       examples=tuple(examples),
     )
+
+  @classmethod
+  def from_yaml(cls, path: str | Path) -> RegexManifest:
+    """Load and validate a regex manifest from a YAML file.
+
+    Raises:
+      OSError: if `path` cannot be read.
+      TypeError: if the document, an example, or `schema_version` has the wrong shape.
+      ValueError: if a schema field, `name`, or an example's `source` is invalid.
+    """
+    return cls.from_text(Path(path).read_text(encoding="utf-8"))
 
   def to_dict(self) -> dict[str, object]:
     result: dict[str, object] = {

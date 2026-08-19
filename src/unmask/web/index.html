@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Unmask · Specification studio</title>
+    <link rel="stylesheet" href="/assets/style.css">
+  </head>
+  <body>
+    <header class="masthead">
+      <a class="brand" href="/" aria-label="Unmask home">
+        <span class="brand-mark" aria-hidden="true">U</span>
+        <span>Unmask</span>
+      </a>
+      <div class="masthead-copy">
+        <span class="eyebrow">Local analysis studio</span>
+        <span id="storage-status" class="storage-status">Starting…</span>
+      </div>
+    </header>
+
+    <main class="studio">
+      <aside class="studies-panel" aria-labelledby="studies-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Load files</p>
+            <h1 id="studies-heading">Specifications</h1>
+          </div>
+          <button id="import-button" class="button button-primary" type="button">
+            Load from disk
+          </button>
+          <input id="file-input" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden>
+        </div>
+
+        <section aria-labelledby="samples-heading">
+          <h2 id="samples-heading" class="section-label">Examples</h2>
+          <div id="sample-list" class="study-list" role="list"></div>
+        </section>
+
+        <section aria-labelledby="imports-heading" class="imports-section">
+          <div class="section-row">
+            <h2 id="imports-heading" class="section-label">Imported studies</h2>
+            <button id="clear-button" class="text-button" type="button">Clear all</button>
+          </div>
+          <div id="import-list" class="study-list" role="list"></div>
+          <p id="imports-empty" class="empty-note">Files you import stay in this browser.</p>
+        </section>
+      </aside>
+
+      <section class="workspace" aria-live="polite">
+        <div class="workspace-header">
+          <div>
+            <p id="study-kind" class="eyebrow">No specification loaded</p>
+            <h2 id="study-title">Load a file to scan or diagnose</h2>
+          </div>
+          <div class="study-actions">
+            <button id="rename-button" class="button button-quiet" type="button" hidden>Rename</button>
+            <button id="delete-button" class="button button-danger" type="button" hidden>Delete</button>
+          </div>
+        </div>
+
+        <div id="analysis-controls" class="analysis-controls" hidden>
+          <div class="workflow-toggle" role="group" aria-label="Analysis workflow">
+            <button id="scan-mode" class="button button-quiet active" type="button">Scan</button>
+            <button id="diagnose-mode" class="button button-quiet" type="button">Diagnose</button>
+          </div>
+          <label id="provider-control">
+            <span>Provider</span>
+            <select id="provider-select"></select>
+          </label>
+          <label id="model-control">
+            <span>Model</span>
+            <input id="model-input" type="text" autocomplete="off">
+          </label>
+          <span id="regex-model-note" class="regex-model-note" hidden>Local regex scan · no model</span>
+          <button id="incidents-button" class="button button-quiet" type="button" hidden>Attach incidents</button>
+          <input id="incidents-input" type="file" accept=".json,application/json,text/plain" hidden>
+          <button id="analyze-button" class="button button-primary" type="button">Analyze</button>
+        </div>
+        <p id="provider-disclosure" class="disclosure" hidden>
+          Natural-language analysis sends this specification to the selected external model provider.
+        </p>
+        <div id="notice" class="notice" role="status" hidden></div>
+
+        <div class="analysis-grid">
+          <section class="source-panel" aria-labelledby="source-heading">
+            <div class="content-heading">
+              <div>
+                <p class="eyebrow">Source</p>
+                <h2 id="source-heading">Specification</h2>
+              </div>
+              <div class="source-actions">
+                <span id="source-name" class="file-name"></span>
+                <button id="taxonomy-button" class="button button-quiet" type="button">Attach taxonomy</button>
+                <input id="taxonomy-input" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden>
+              </div>
+            </div>
+            <pre id="source-view" class="source-view" tabindex="0"><span class="source-placeholder">Load a specification, then scan or diagnose it.</span></pre>
+          </section>
+
+          <section class="findings-panel" aria-labelledby="findings-heading">
+            <div class="content-heading">
+              <div>
+                <p class="eyebrow">Structure</p>
+                <h2 id="findings-heading">Specification bugs</h2>
+              </div>
+              <span id="finding-count" class="finding-count">0</span>
+            </div>
+            <div id="summary" class="summary" hidden></div>
+            <div id="finding-list" class="finding-list">
+              <div class="empty-state">
+                <span class="empty-symbol" aria-hidden="true">↔</span>
+                <p>Load a specification, then scan or diagnose to connect source rules with proven defects.</p>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

@@ -55,16 +55,14 @@ def _parse_example(raw: object, index: int) -> GuardrailExample:
   )
 
 
-def load_guardrail(path: Path) -> Guardrail:
-  """Load and validate a guardrail definition from a YAML file.
+def load_guardrail_text(text: str) -> Guardrail:
+  """Load and validate a guardrail definition from YAML text.
 
   Raises:
     TypeError: if the YAML document, or a rule or example within it, is malformed.
     ValueError: if `name`, `system_prompt`, or `rules` is missing or empty.
   """
-  raw: dict[str, object] = _mapping(
-    yaml.safe_load(path.read_text(encoding="utf-8")) or {}, name="guardrail"
-  )
+  raw: dict[str, object] = _mapping(yaml.safe_load(text) or {}, name="guardrail")
   name: str = str(raw.get("name", "")).strip()
   system_prompt: str = str(raw.get("system_prompt", "")).strip()
   if not name or not system_prompt:
@@ -92,6 +90,17 @@ def load_guardrail(path: Path) -> Guardrail:
   return Guardrail(
     name=name, system_prompt=system_prompt, rules=rules, examples=examples
   )
+
+
+def load_guardrail(path: Path) -> Guardrail:
+  """Load and validate a guardrail definition from a YAML file.
+
+  Raises:
+    OSError: if `path` cannot be read.
+    TypeError: if the YAML document, or a rule or example within it, is malformed.
+    ValueError: if `name`, `system_prompt`, or `rules` is missing or empty.
+  """
+  return load_guardrail_text(path.read_text(encoding="utf-8"))
 
 
 @dataclass(frozen=True)

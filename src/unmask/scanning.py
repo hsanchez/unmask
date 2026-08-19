@@ -88,18 +88,14 @@ class RegexScanReport:
     }
 
 
-def load_taxonomy_regex_examples(path: Path | None) -> tuple[RegexExample, ...]:
-  """Load `regex_examples` from a taxonomy YAML file, or `()` if `path` is None.
+def parse_taxonomy_regex_examples(text: str) -> tuple[RegexExample, ...]:
+  """Load `regex_examples` from taxonomy YAML text.
 
   Raises:
     TypeError: if the taxonomy or an example entry is not a mapping.
     ValueError: if `regex_examples_version` is not `1`.
   """
-  if path is None:
-    return ()
-  loaded_value: object = cast(
-    "object", yaml.safe_load(stream=path.read_text(encoding="utf-8"))
-  )
+  loaded_value: object = cast("object", yaml.safe_load(stream=text))
   loaded: object = loaded_value or {}
   if not isinstance(loaded, dict):
     raise TypeError("taxonomy must be a mapping")
@@ -123,6 +119,19 @@ def load_taxonomy_regex_examples(path: Path | None) -> tuple[RegexExample, ...]:
     }
     examples.append(RegexExample.from_dict(raw=normalized, index=index))
   return tuple(examples)
+
+
+def load_taxonomy_regex_examples(path: Path | None) -> tuple[RegexExample, ...]:
+  """Load `regex_examples` from a taxonomy YAML file, or `()` if `path` is None.
+
+  Raises:
+    OSError: if `path` cannot be read.
+    TypeError: if the taxonomy or an example entry is not a mapping.
+    ValueError: if `regex_examples_version` is not `1`.
+  """
+  if path is None:
+    return ()
+  return parse_taxonomy_regex_examples(path.read_text(encoding="utf-8"))
 
 
 def merge_regex_examples(
@@ -155,11 +164,24 @@ def merge_regex_examples(
 def scan_regex_manifest(
   manifest: RegexManifest,
   taxonomy_path: Path | None = None,
+  *,
+  taxonomy_text: str | None = None,
 ) -> RegexScanReport:
-  """Diagnose every labeled example bundled with `manifest` (and `taxonomy_path`, if given)."""
+  """Diagnose every labeled example bundled with `manifest` and a taxonomy.
+
+  Raises:
+    ValueError: if both `taxonomy_path` and `taxonomy_text` are supplied.
+  """
+  if taxonomy_path is not None and taxonomy_text is not None:
+    raise ValueError("supply taxonomy_path or taxonomy_text, not both")
+  taxonomy_examples: tuple[RegexExample, ...] = (
+    parse_taxonomy_regex_examples(taxonomy_text)
+    if taxonomy_text is not None
+    else load_taxonomy_regex_examples(path=taxonomy_path)
+  )
   examples: tuple[RegexExample, ...] = merge_regex_examples(
     manifest_examples=manifest.examples,
-    taxonomy_examples=load_taxonomy_regex_examples(path=taxonomy_path),
+    taxonomy_examples=taxonomy_examples,
   )
   configs: list[DiagnosisConfig] = []
   for index, example in enumerate(examples, start=1):
@@ -182,7 +204,7 @@ def scan_regex_manifest(
       )
     )
   diagnoses: tuple[DiagnosisReport, ...] = (
-    tuple(RegexDiagnoser().diagnose_many(configs=tuple(configs))) if configs else ()
+    RegexDiagnoser().diagnose_many(configs=tuple(configs)) if configs else ()
   )
   cases: tuple[RegexScanCase, ...] = tuple(
     RegexScanCase(
@@ -199,5 +221,5 @@ def scan_regex_manifest(
   return RegexScanReport(
     manifest=manifest,
     cases=cases,
-    taxonomy_supplied=taxonomy_path is not None,
+    taxonomy_supplied=taxonomy_path is not None or taxonomy_text is not None,
   )

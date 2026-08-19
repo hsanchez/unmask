@@ -9,40 +9,34 @@ import sys
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 import yaml
 from dotenv import dotenv_values, find_dotenv
 
-from .analyzer import SymbolicAnalyzer
-from .backend import JudgeBackend, create_backend
-from .config import TargetConfig, load_guardrail
+from .backend import create_backend
+from .config import TargetConfig
 from .diagnosis import (
-  ConversationIncident,
   DiagnosisConfig,
   DiagnosisReport,
   RegexDiagnoser,
   RegexManifest,
-  TextLocation,
 )
-from .extractor import SemanticExtractor
 from .importer import ImportedViolation, load_violations
-from .models import Finding, Guardrail, SymbolicModel
-from .scanning import RegexScanReport, scan_regex_manifest
+from .service import (
+  DEFAULT_MODELS,
+  ScanResult,
+  diagnosis_status,
+  incident_from_violation,
+  scan_specification,
+)
 from .visualization import (
   CollectionResult,
   DiagnosisVisualizer,
   render_collection_index,
   write_visualization,
 )
-
-type SpecificationKind = Literal["natural_language", "regex"]
-
-_DEFAULT_MODELS: dict[str, str] = {
-  "gemini": "gemini-2.5-flash",
-  "openai": "gpt-4o",
-  "anthropic": "claude-opus-4-5",
-}
+from .webapp import DEFAULT_PORT, run_local_server
 
 _ALLOWED_ENV_VARS: frozenset[str] = frozenset(
   {
@@ -78,35 +72,19 @@ class DiagnoseArguments:
   open_index: bool
 
 
-type CommandArguments = ScanArguments | DiagnoseArguments
+@dataclass(frozen=True)
+class ServeArguments:
+  port: int
+  open_browser: bool
+
+
+type CommandArguments = ScanArguments | DiagnoseArguments | ServeArguments
 
 
 def _write_json(path: Path, data: object) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   _ = path.write_text(json.dumps(data, indent=2), encoding="utf-8")
   print(f"wrote {path}")
-
-
-def _load_yaml(path: Path) -> object:
-  return cast("object", yaml.safe_load(path.read_text(encoding="utf-8")))
-
-
-def _specification_kind(path: Path) -> SpecificationKind:
-  loaded: object = _load_yaml(path)
-  if not isinstance(loaded, dict):
-    raise TypeError("specification must be a YAML mapping")
-  specification: dict[object, object] = cast("dict[object, object]", loaded)
-  kind: object | None = specification.get("kind")
-  if kind == "regex":
-    return "regex"
-  if kind is not None:
-    raise ValueError(f"unsupported specification kind: {kind!r}")
-  if all(field in specification for field in ("name", "system_prompt", "rules")):
-    return "natural_language"
-  raise ValueError(
-    "specification must be a regex manifest with kind: regex or a "
-    + "natural-language guardrail with name, system_prompt, and rules"
-  )
 
 
 def _add_env_file_argument(parser: argparse.ArgumentParser) -> None:
@@ -129,49 +107,11 @@ def _non_negative_integer(value: str) -> int:
   return parsed
 
 
-def _run_natural_language_scan(
-  specification_path: Path,
-  *,
-  taxonomy_path: Path | None,
-  output_directory: Path,
-  target: TargetConfig,
-) -> int:
-  guardrail: Guardrail = load_guardrail(specification_path)
-  taxonomy: object | None = (
-    _load_yaml(taxonomy_path) if taxonomy_path is not None else None
-  )
-  backend: JudgeBackend = create_backend(target)
-  model: SymbolicModel = SemanticExtractor(backend).extract(guardrail, taxonomy)
-  findings: list[Finding] = SymbolicAnalyzer(model, guardrail).analyze()
-
-  _write_json(output_directory / "symbolic_model.json", model.to_dict())
-  _write_json(
-    output_directory / "findings.json",
-    [finding.to_dict() for finding in findings],
-  )
-  print(f"natural-language scan: {len(findings)} finding(s)")
-  return 0
-
-
-def _run_regex_scan(
-  specification_path: Path,
-  *,
-  taxonomy_path: Path | None,
-  output_directory: Path,
-) -> int:
-  manifest: RegexManifest = RegexManifest.from_yaml(specification_path)
-  report: RegexScanReport = scan_regex_manifest(
-    manifest=manifest,
-    taxonomy_path=taxonomy_path,
-  )
-  report_data: dict[str, object] = report.to_dict()
-  _write_json(output_directory / "scan.json", report_data)
-  summary: dict[str, object] = cast("dict[str, object]", report_data["summary"])
-  print(
-    f"regex scan: {summary['findings']} finding(s), "
-    + f"{summary['examples']} example(s), status={summary['status']}"
-  )
-  return 0
+def _port_number(value: str) -> int:
+  port: int = _non_negative_integer(value)
+  if port > 65_535:
+    raise argparse.ArgumentTypeError("must be no greater than 65535")
+  return port
 
 
 def _run_scan(
@@ -181,19 +121,48 @@ def _run_scan(
   output_directory: Path,
   target: TargetConfig,
 ) -> int:
-  kind: SpecificationKind = _specification_kind(specification_path)
-  if kind == "regex":
-    return _run_regex_scan(
-      specification_path,
-      taxonomy_path=taxonomy_path,
-      output_directory=output_directory,
-    )
-  return _run_natural_language_scan(
-    specification_path,
-    taxonomy_path=taxonomy_path,
-    output_directory=output_directory,
+  result: ScanResult = scan_specification(
+    specification_path.read_text(encoding="utf-8"),
+    specification_name=specification_path.name,
+    taxonomy_text=(
+      taxonomy_path.read_text(encoding="utf-8") if taxonomy_path is not None else None
+    ),
     target=target,
+    backend_factory=create_backend,
   )
+  if result.specification_kind == "regex":
+    if result.regex_report is None:
+      raise RuntimeError("regex scan did not produce a regex report")
+    report_data: dict[str, object] = result.regex_report.to_dict()
+    _write_json(output_directory / "scan.json", report_data)
+    summary: dict[str, object] = cast("dict[str, object]", report_data["summary"])
+    print(
+      f"regex scan: {summary['findings']} finding(s), "
+      + f"{summary['examples']} example(s), status={summary['status']}"
+    )
+    return 0
+
+  if result.symbolic_model is None:
+    raise RuntimeError("natural-language scan did not produce a symbolic model")
+  _write_json(output_directory / "symbolic_model.json", result.symbolic_model.to_dict())
+  _write_json(
+    output_directory / "findings.json",
+    [
+      {
+        "id": finding.id,
+        "type": finding.bug_type,
+        "severity": finding.severity,
+        "ruleIds": list(finding.rule_ids),
+        "summary": finding.summary,
+        "rationale": finding.rationale,
+        "witness": dict(sorted(finding.witness.items())),
+        "metadata": finding.metadata,
+      }
+      for finding in result.findings
+    ],
+  )
+  print(f"natural-language scan: {len(result.findings)} finding(s)")
+  return 0
 
 
 def _diagnosis_config(
@@ -204,36 +173,14 @@ def _diagnosis_config(
   index: int,
   output_directory: Path,
 ) -> DiagnosisConfig:
-  start: int = violation.local_start
-  incident: ConversationIncident = ConversationIncident(
-    text=violation.context,
-    value=violation.value,
-    location=TextLocation(start=start, end=start + len(violation.value)),
-    source_location=violation.source_location,
-    observed_outcome="block",
-    expected_outcome=violation.expected_outcome,
-    expected_reason=violation.expected_reason,
-    expected_outcome_source=(
-      "violation" if violation.expected_outcome is not None else "missing"
-    ),
-  )
-  report_path: Path = output_directory / "incidents" / f"{index:04d}" / "report.json"
   return DiagnosisConfig(
     source=manifest_path.resolve(),
     name=f"{manifest.name} incident {index}",
-    incident=incident,
+    incident=incident_from_violation(violation),
     rules=manifest.rules,
-    output_path=report_path,
+    output_path=output_directory / "incidents" / f"{index:04d}" / "report.json",
     match_timeout_seconds=manifest.match_timeout_seconds,
   )
-
-
-def _diagnosis_status(report: DiagnosisReport) -> str:
-  if report.findings:
-    return "supported_defect"
-  if report.matches:
-    return "no_supported_defect"
-  return "no_matching_rule"
 
 
 def _write_diagnosis_artifacts(
@@ -258,7 +205,7 @@ def _write_diagnosis_artifacts(
     sourceLocation=source_location,
     value=report.incident.value,
     findings=len(report.findings),
-    status=_diagnosis_status(report),
+    status=diagnosis_status(report),
     expectedOutcomeSource=report.incident.expected_outcome_source,
     expectedReason=report.incident.expected_reason,
     config=str(config.source),
@@ -347,7 +294,7 @@ def _build_parser() -> argparse.ArgumentParser:
   )
   _ = scan_parser.add_argument(
     "--provider",
-    choices=sorted(_DEFAULT_MODELS),
+    choices=sorted(DEFAULT_MODELS),
     default="gemini",
     help="judge backend for natural-language scans (default: gemini)",
   )
@@ -396,6 +343,23 @@ def _build_parser() -> argparse.ArgumentParser:
   )
   _add_env_file_argument(diagnose_parser)
 
+  serve_parser = subparsers.add_parser(
+    "serve", help="start the local browser analysis studio"
+  )
+  _ = serve_parser.add_argument(
+    "--port",
+    type=_port_number,
+    default=DEFAULT_PORT,
+    help=f"loopback port, or 0 for an available port (default: {DEFAULT_PORT})",
+  )
+  _ = serve_parser.add_argument(
+    "--no-open",
+    action="store_false",
+    dest="open_browser",
+    help="do not open the default browser",
+  )
+  _add_env_file_argument(serve_parser)
+
   return parser
 
 
@@ -443,16 +407,21 @@ def _parse_arguments(argv: list[str] | None) -> CommandArguments:
       model=cast("str | None", values["model"]),
       thinking_budget=cast("int", values["thinking_budget"]),
     )
-  return DiagnoseArguments(
-    regexes=cast("Path", values["regexes"]),
-    violations=cast("Path", values["violations"]),
-    output=cast("Path", values["output"]),
-    open_index=cast("bool", values["open_index"]),
+  if values["command"] == "diagnose":
+    return DiagnoseArguments(
+      regexes=cast("Path", values["regexes"]),
+      violations=cast("Path", values["violations"]),
+      output=cast("Path", values["output"]),
+      open_index=cast("bool", values["open_index"]),
+    )
+  return ServeArguments(
+    port=cast("int", values["port"]),
+    open_browser=cast("bool", values["open_browser"]),
   )
 
 
 def main(argv: list[str] | None = None) -> int:
-  """Parse CLI arguments and dispatch to the scan or diagnose workflow.
+  """Parse CLI arguments and dispatch to a scan, diagnosis, or local studio.
 
   Raises:
     SystemExit: if argument parsing fails or `--help` is requested, via argparse.
@@ -469,17 +438,19 @@ def main(argv: list[str] | None = None) -> int:
         target=TargetConfig(
           project=args.project,
           location=args.location,
-          judge_model=args.model or _DEFAULT_MODELS[args.provider],
+          judge_model=args.model or DEFAULT_MODELS[args.provider],
           thinking_budget=args.thinking_budget,
           provider=args.provider,
         ),
       )
-    return _run_diagnose(
-      args.regexes,
-      args.violations,
-      output_directory=args.output,
-      open_index=args.open_index,
-    )
+    if isinstance(args, DiagnoseArguments):
+      return _run_diagnose(
+        args.regexes,
+        args.violations,
+        output_directory=args.output,
+        open_index=args.open_index,
+      )
+    return run_local_server(port=args.port, open_browser=args.open_browser)
   except (OSError, RuntimeError, TypeError, ValueError, yaml.YAMLError) as exc:
     print(f"error: {exc}", file=sys.stderr)
     return 1

@@ -110,6 +110,23 @@ class TestMainArgumentParsing:
     with pytest.raises(SystemExit):
       _ = main(["extract"])
 
+  @pytest.mark.parametrize("port", ["-1", "65536"])
+  def test_rejects_invalid_serve_port(self, port: str) -> None:
+    with pytest.raises(SystemExit):
+      _ = main(["serve", "--port", port])
+
+  def test_serve_dispatches_local_studio(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[int, bool]] = []
+
+    def run_server(*, port: int, open_browser: bool) -> int:
+      calls.append((port, open_browser))
+      return 0
+
+    monkeypatch.setattr(cli_module, "run_local_server", run_server)
+
+    assert main(["serve", "--port", "0", "--no-open"]) == 0
+    assert calls == [(0, False)]
+
 
 class TestMainScan:
   def test_scans_natural_language_guardrail_and_writes_artifacts(
