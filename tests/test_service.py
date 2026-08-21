@@ -182,6 +182,10 @@ def test_regex_diagnosis_normalizes_incident_findings() -> None:
     "contradiction",
     "over_strict",
   }
+  assert all(finding.metadata["remediation"] for finding in result.findings)
+  assert all(
+    finding.metadata["counterexampleExplanation"] for finding in result.findings
+  )
   assert result.to_dict()["workflow"] == "diagnose"
 
 

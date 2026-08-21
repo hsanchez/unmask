@@ -33,10 +33,26 @@ from .scanning import RegexScanReport, scan_regex_manifest
 type SpecificationKind = Literal["natural_language", "regex"]
 type AnalysisWorkflow = Literal["scan", "diagnose"]
 
+PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
+  "gemini": (
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.5-flash-lite",
+  ),
+  "openai": (
+    "gpt-4o",
+    "gpt-4o-mini",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+  ),
+  "anthropic": (
+    "claude-opus-4-5",
+    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
+  ),
+}
 DEFAULT_MODELS: dict[str, str] = {
-  "gemini": "gemini-2.5-flash",
-  "openai": "gpt-4o",
-  "anthropic": "claude-opus-4-5",
+  provider: models[0] for provider, models in PROVIDER_MODELS.items()
 }
 
 _compose_yaml = cast("Callable[[str], object]", yaml.compose)
@@ -375,6 +391,7 @@ def _regex_finding(
       "caseIndex": case_index,
       "exampleContent": example_content,
       "remediation": finding.remediation,
+      "counterexampleExplanation": finding.counterexample_explanation.to_dict(),
       "proof": finding.proof.to_dict(),
       "evidence": [item.to_dict() for item in finding.evidence],
     },

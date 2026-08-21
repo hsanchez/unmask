@@ -4,119 +4,221 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Unmask · Specification studio</title>
-    <link rel="stylesheet" href="/assets/style.css?v=2">
+    <link rel="stylesheet" href="/assets/style.css?v=14">
   </head>
   <body>
     <header class="masthead">
       <a class="brand" href="/" aria-label="Unmask home">
-        <span class="brand-mark" aria-hidden="true">U</span>
-        <span>Unmask</span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>unmask</span>
       </a>
-      <div class="masthead-copy">
-        <span class="eyebrow">Local analysis studio</span>
-        <span id="storage-status" class="storage-status">Starting…</span>
-      </div>
+
+      <nav class="masthead-tools" aria-label="Application information">
+        <span id="app-version" class="version-label">v—</span>
+        <a class="masthead-link" href="https://github.com/hsanchez/unmask#readme" target="_blank" rel="noreferrer">Docs</a>
+        <a class="github-link" href="https://github.com/hsanchez/unmask" target="_blank" rel="noreferrer" aria-label="Unmask on GitHub">
+          <span class="github-mark" aria-hidden="true"></span>
+        </a>
+        <button
+          id="active-file-control"
+          class="file-copy-control"
+          type="button"
+          aria-describedby="copy-status"
+          hidden
+        >
+          <span id="active-filename">unmask.yaml</span>
+          <span class="copy-icon" aria-hidden="true"></span>
+        </button>
+        <span id="copy-status" class="visually-hidden" role="status"></span>
+      </nav>
     </header>
 
-    <main class="studio">
-      <aside class="studies-panel" aria-labelledby="studies-heading">
-        <div class="panel-heading">
-          <div>
-            <p class="eyebrow">Load files</p>
-            <h1 id="studies-heading">Specifications</h1>
+    <div class="mobile-toolbar" aria-label="Workspace panels">
+      <button
+        id="specifications-toggle"
+        class="toolbar-button"
+        type="button"
+        aria-controls="specifications-panel"
+        aria-expanded="false"
+      >Specifications</button>
+      <button
+        id="analysis-toggle"
+        class="toolbar-button"
+        type="button"
+        aria-controls="analysis-panel"
+        aria-expanded="false"
+      >Analysis</button>
+    </div>
+
+    <main class="studio-shell">
+      <aside id="specifications-panel" class="specifications-panel" aria-labelledby="studies-heading">
+        <div class="rail-heading">
+          <h1 id="studies-heading">Specifications</h1>
+          <div class="rail-heading-actions">
+            <button id="import-button" class="icon-button" type="button" aria-label="Import specification">+</button>
+            <span id="study-count" class="study-count">0</span>
+            <button id="specifications-close" class="drawer-close" type="button" aria-label="Close specifications">×</button>
           </div>
-          <button id="import-button" class="button button-primary" type="button">
-            Load from disk
-          </button>
           <input id="file-input" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden>
         </div>
 
-        <section aria-labelledby="samples-heading">
-          <h2 id="samples-heading" class="section-label">Examples</h2>
-          <div id="sample-list" class="study-list" role="list"></div>
-        </section>
+        <div class="study-scroll">
+          <section aria-labelledby="samples-heading">
+            <h2 id="samples-heading" class="visually-hidden">Examples</h2>
+            <div id="sample-list" class="study-list" role="list"></div>
+          </section>
 
-        <section aria-labelledby="imports-heading" class="imports-section">
-          <div class="section-row">
-            <h2 id="imports-heading" class="section-label">Imported studies</h2>
-            <button id="clear-button" class="text-button" type="button">Clear all</button>
-          </div>
-          <div id="import-list" class="study-list" role="list"></div>
-          <p id="imports-empty" class="empty-note">Files you import stay in this browser.</p>
-        </section>
+          <section aria-labelledby="imports-heading" class="imports-section">
+            <div class="imports-heading">
+              <h2 id="imports-heading" class="visually-hidden">Imported specifications</h2>
+              <button id="restore-samples-button" class="text-button" type="button" hidden>Restore examples</button>
+              <button id="clear-button" class="text-button" type="button">Clear imported</button>
+            </div>
+            <div id="import-list" class="study-list" role="list"></div>
+            <p id="imports-empty" class="empty-note">Use + to import a YAML specification.</p>
+          </section>
+        </div>
+        <p id="storage-status" class="storage-status">Starting…</p>
       </aside>
 
       <section class="workspace" aria-live="polite">
-        <div class="workspace-header">
+        <header class="workspace-header">
           <div>
-            <p id="study-kind" class="eyebrow">No specification loaded</p>
-            <h2 id="study-title">Load a file to scan or diagnose</h2>
+            <p id="study-kind" class="visually-hidden">No specification loaded</p>
+            <h2 id="study-title">Select or import a specification</h2>
           </div>
-          <div class="study-actions">
-            <button id="rename-button" class="button button-quiet" type="button" hidden>Rename</button>
-            <button id="delete-button" class="button button-danger" type="button" hidden>Delete</button>
-          </div>
+        </header>
+
+        <div id="comparison-tabs" class="comparison-tabs" role="tablist" aria-label="Specification comparison">
+          <button
+            id="source-tab"
+            class="comparison-tab active"
+            type="button"
+            role="tab"
+            aria-controls="source-panel"
+            aria-selected="true"
+          >Specification</button>
+          <button
+            id="findings-tab"
+            class="comparison-tab"
+            type="button"
+            role="tab"
+            aria-controls="findings-panel"
+            aria-selected="false"
+            tabindex="-1"
+          >Bugs <span id="mobile-finding-count">0</span></button>
         </div>
 
-        <div id="analysis-controls" class="analysis-controls" hidden>
-          <div class="workflow-toggle" role="group" aria-label="Analysis workflow">
-            <button id="scan-mode" class="button button-quiet active" type="button">Scan</button>
-            <button id="diagnose-mode" class="button button-quiet" type="button">Diagnose</button>
-          </div>
-          <label id="provider-control">
-            <span>Provider:</span>
-            <select id="provider-select"></select>
-          </label>
-          <label id="model-control">
-            <span>Model:</span>
-            <input id="model-input" type="text" autocomplete="off">
-          </label>
-          <span id="regex-model-note" class="regex-model-note" hidden>Local regex scan · no model</span>
-          <button id="incidents-button" class="button button-quiet" type="button" hidden>Attach incidents</button>
-          <input id="incidents-input" type="file" accept=".json,application/json,text/plain" hidden>
-          <button id="analyze-button" class="button button-primary" type="button">Analyze</button>
-        </div>
-        <p id="provider-disclosure" class="disclosure" hidden>
-          Natural-language analysis sends this specification to the selected external model provider.
-        </p>
-        <div id="notice" class="notice" role="status" hidden></div>
-
-        <div class="analysis-grid">
-          <section class="source-panel" aria-labelledby="source-heading">
-            <div class="content-heading">
-              <div>
-                <p class="eyebrow">Source</p>
-                <h2 id="source-heading">Specification</h2>
-              </div>
-              <div class="source-actions">
-                <span id="source-name" class="file-name"></span>
-                <button id="taxonomy-button" class="button button-quiet" type="button">Attach taxonomy</button>
-                <input id="taxonomy-input" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden>
-              </div>
+        <div id="analysis-grid" class="analysis-grid" data-active-panel="source">
+          <section id="source-panel" class="source-panel" role="tabpanel" aria-labelledby="source-tab source-heading">
+            <div class="content-heading source-heading-row">
+              <h2 id="source-heading"><span>specification</span> <small>(source)</small></h2>
+              <span id="source-name" class="file-name"></span>
             </div>
-            <pre id="source-view" class="source-view" tabindex="0"><span class="source-placeholder">Load a specification, then scan or diagnose it.</span></pre>
+            <pre id="source-view" class="source-view" tabindex="0"><span class="source-placeholder">Select a specification, then scan or diagnose it.</span></pre>
           </section>
 
-          <section class="findings-panel" aria-labelledby="findings-heading">
-            <div class="content-heading">
-              <div>
-                <p class="eyebrow">Structure</p>
-                <h2 id="findings-heading">Specification bugs</h2>
-              </div>
-              <span id="finding-count" class="finding-count">0</span>
+          <section id="findings-panel" class="findings-panel" role="tabpanel" aria-labelledby="findings-tab findings-heading">
+            <div class="content-heading findings-heading-row">
+              <h2 id="findings-heading"><span>specification bugs</span> <small>(structure)</small></h2>
             </div>
             <div id="summary" class="summary" hidden></div>
             <div id="finding-list" class="finding-list">
               <div class="empty-state">
-                <span class="empty-symbol" aria-hidden="true">↔</span>
-                <p>Load a specification, then scan or diagnose to connect source rules with proven defects.</p>
+                <p>Select a specification, then scan or diagnose it.</p>
               </div>
             </div>
+            <span id="finding-count" class="finding-count" aria-label="0 findings">0</span>
           </section>
         </div>
       </section>
+
+      <aside id="analysis-panel" class="analysis-panel" aria-labelledby="analysis-heading">
+        <div class="rail-heading analysis-heading">
+          <h2 id="analysis-heading">Analysis</h2>
+          <div id="workflow-toggle" class="workflow-toggle" role="group" aria-label="Analysis workflow" hidden>
+            <button id="scan-mode" class="workflow-button active" type="button">Scan</button>
+            <button
+              id="diagnose-mode"
+              class="workflow-button"
+              type="button"
+              aria-describedby="workflow-note"
+            >Diagnose</button>
+          </div>
+          <button id="analysis-close" class="drawer-close" type="button" aria-label="Close analysis">×</button>
+        </div>
+
+        <div id="analysis-controls" class="analysis-controls inspector-panel" hidden>
+          <div id="provider-control" class="control-row inspector-row picker-row">
+            <span>Provider</span>
+            <button
+              id="provider-picker-button"
+              class="provider-picker-button"
+              type="button"
+              aria-label="Choose provider"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+            >
+              <span id="provider-value" class="provider-value"></span>
+              <svg class="picker-step-icon" width="10" height="14" viewBox="0 0 10 14" aria-hidden="true">
+                <path d="M2.5 5.5 5 3l2.5 2.5M2.5 8.5 5 11l2.5-2.5"></path>
+              </svg>
+            </button>
+            <div id="provider-menu" class="picker-menu" role="listbox" aria-label="Providers" hidden></div>
+          </div>
+
+          <div id="model-control" class="control-row inspector-row model-row">
+            <span>Model</span>
+            <span id="model-value" class="model-value"></span>
+            <button
+              id="model-picker-button"
+              class="model-picker-button"
+              type="button"
+              aria-label="Choose model"
+              aria-haspopup="listbox"
+              aria-expanded="false"
+            ><span id="model-color" class="model-color" aria-hidden="true"></span></button>
+            <div id="model-menu" class="picker-menu model-menu" role="listbox" aria-label="Models" hidden></div>
+          </div>
+
+          <label id="thinking-budget-control" class="control-row inspector-row budget-row" for="thinking-budget-input">
+            <span>Volume</span>
+            <input id="thinking-budget-input" type="range" min="0" max="1024" step="1" value="128" aria-label="Model thinking budget">
+            <output id="thinking-budget-value" for="thinking-budget-input">128</output>
+          </label>
+
+          <p id="regex-model-note" class="visually-hidden" hidden>Local regex scan · no model</p>
+          <p id="workflow-note" class="visually-hidden" hidden>Diagnose requires a regex specification.</p>
+
+          <div id="taxonomy-control" class="control-row inspector-row attachment-row">
+            <button id="taxonomy-button" class="attachment-name" type="button">Attach taxonomy</button>
+            <button
+              id="taxonomy-toggle"
+              class="switch"
+              type="button"
+              role="switch"
+              aria-checked="false"
+              aria-label="Attach taxonomy"
+            ><span aria-hidden="true"></span></button>
+            <input id="taxonomy-input" type="file" accept=".yaml,.yml,application/yaml,text/yaml" hidden>
+          </div>
+
+          <p id="provider-disclosure" class="disclosure" hidden>
+            This specification is sent to the selected model provider.
+          </p>
+          <div class="analysis-actions">
+            <button id="incidents-button" class="attachment-action" type="button" hidden>Attach incidents</button>
+            <input id="incidents-input" type="file" accept=".json,application/json,text/plain" hidden>
+            <button id="analyze-button" class="run-button" type="button">Scan</button>
+          </div>
+        </div>
+
+        <p id="analysis-empty" class="analysis-empty">Select a specification to configure an analysis.</p>
+        <div id="notice" class="notice" role="status" hidden></div>
+      </aside>
     </main>
 
-    <script src="/assets/app.js" defer></script>
+    <button id="drawer-overlay" class="drawer-overlay" type="button" aria-label="Close open panel" hidden></button>
+    <script src="/assets/app.js?v=14" defer></script>
   </body>
 </html>

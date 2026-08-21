@@ -67,17 +67,19 @@ uv run unmask serve --no-open
 loading behavior as the scan commands.
 
 The studio starts empty. Load a `.yaml` or `.yml` specification, or open a bundled
-example, then choose **Scan** or **Diagnose** and select **Analyze**. Imported
-studies and completed results stay in the browser's IndexedDB storage. Rename,
-delete, and clear actions affect that local browser storage only; Unmask does not
-retain uploaded files on the server.
+example from the Specifications panel. Use the Analysis panel to choose **Scan** or
+**Diagnose**, configure the workflow, and run it. Imported studies and completed
+results stay in the browser's IndexedDB storage. Rename and delete work for both
+bundled examples and imported specifications; removed bundled examples can be
+restored from the Specifications panel. These actions affect browser-local storage
+only; Unmask does not retain uploaded files on the server.
 
 **Scan** runs the same analysis as `unmask scan`. Regex scans run locally.
 Natural-language scans send the specification and optional taxonomy to the selected
-configured model provider. **Diagnose** is available for regex specifications and
-needs a violations JSON file; the bundled regex example includes one. Credentials
-remain in the server process environment and are never sent to or stored by the
-browser.
+configured model provider; Volume controls the model thinking budget. **Diagnose**
+is available for regex specifications and needs a violations JSON file; the bundled
+regex example includes one. Credentials remain in the server process environment
+and are never sent to or stored by the browser.
 
 Source highlighting initially maps findings to complete YAML rule values. Hover,
 focus, or select either a source rule or finding card to reveal its relationships in

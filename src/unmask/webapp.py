@@ -6,6 +6,7 @@ import os
 import sys
 import webbrowser
 from collections.abc import Callable
+from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
 from typing import Protocol, cast
 
@@ -17,6 +18,7 @@ from werkzeug.serving import make_server
 from .config import TargetConfig
 from .service import (
   DEFAULT_MODELS,
+  PROVIDER_MODELS,
   ScanResult,
   diagnose_specification,
   scan_specification,
@@ -25,6 +27,16 @@ from .service import (
 
 MAX_REQUEST_BYTES = 1_000_000
 DEFAULT_PORT = 8765
+
+
+def _application_version() -> str:
+  try:
+    return version("unmask")
+  except PackageNotFoundError:
+    return "development"
+
+
+APPLICATION_VERSION = _application_version()
 
 
 class _LocalServer(Protocol):
@@ -164,6 +176,7 @@ def create_app() -> Flask:
       {
         "id": provider,
         "defaultModel": model,
+        "models": PROVIDER_MODELS[provider],
         "configured": _provider_configured(provider),
       }
       for provider, model in DEFAULT_MODELS.items()
@@ -171,6 +184,7 @@ def create_app() -> Flask:
     return jsonify(
       {
         "schemaVersion": 1,
+        "version": APPLICATION_VERSION,
         "specificationKinds": ["natural_language", "regex"],
         "workflows": ["scan", "diagnose"],
         "diagnosisSpecificationKinds": ["regex"],

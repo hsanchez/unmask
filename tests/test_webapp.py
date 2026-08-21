@@ -5,6 +5,8 @@ import pytest
 from flask import Flask
 from werkzeug.test import TestResponse
 
+from unmask import webapp as webapp_module
+from unmask.config import TargetConfig
 from unmask.webapp import MAX_REQUEST_BYTES, create_app, run_local_server
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -26,20 +28,30 @@ def test_index_serves_studio_with_security_headers(application: Flask) -> None:
   response_data: bytes = _response_data(response)
 
   assert response.status_code == 200
-  assert b"Local analysis studio" in response_data
-  assert b"Load a file to scan or diagnose" in response_data
+  assert b'id="specifications-panel"' in response_data
+  assert b'id="analysis-panel"' in response_data
+  assert b'id="comparison-tabs"' in response_data
   assert b'id="scan-mode"' in response_data
   assert b'id="diagnose-mode"' in response_data
-  assert b"Provider:" in response_data
-  assert b'id="provider-select"' in response_data
-  assert b"Model:" in response_data
-  assert b'id="model-input"' in response_data
+  assert b"Provider" in response_data
+  assert b'id="provider-value"' in response_data
+  assert b'id="provider-picker-button"' in response_data
+  assert b'id="provider-menu"' in response_data
+  assert b"Model" in response_data
+  assert b'id="model-value"' in response_data
+  assert b'id="model-picker-button"' in response_data
+  assert b'id="model-menu"' in response_data
+  assert b'id="thinking-budget-input"' in response_data
+  assert b'id="taxonomy-toggle"' in response_data
+  assert b'id="active-file-control"' in response_data
+  assert b'id="restore-samples-button"' in response_data
+  assert b'href="https://github.com/hsanchez/unmask#readme"' in response_data
+  assert b'class="analysis-actions"' in response_data
   assert b'id="analyze-button"' in response_data
-  assert b'href="/assets/style.css?v=2"' in response_data
-  assert response_data.index(b'id="source-name"') < response_data.index(
-    b'id="taxonomy-button"'
-  )
+  assert b'href="/assets/style.css?v=14"' in response_data
+  assert b'src="/assets/app.js?v=14"' in response_data
   assert b'id="regex-model-note"' in response_data
+  assert b'id="workflow-note"' in response_data
   assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
   assert "no-store" in response.headers["Cache-Control"]
 
@@ -54,10 +66,48 @@ def test_assets_disable_cache_for_local_development(application: Flask) -> None:
   assert b"innerHTML" not in response_data
   assert b"renderEmptyWorkspace()" in response_data
   assert b"/api/v1/diagnoses" in response_data
+  assert b"const modelControlsApply" in response_data
+  assert b"elements.providerControl.hidden = false" in response_data
+  assert b"navigator.clipboard?.writeText" in response_data
+  assert b"setComparisonTab" in response_data
+  assert b"toggleTaxonomy" in response_data
+  assert b"studyActionIcon" in response_data
+  assert b"sample_override" in response_data
+  assert b"startRenamingStudy" in response_data
+  assert b"finishRenamingStudy" in response_data
+  assert b"window.prompt" not in response_data
+  assert b"toggleModelMenu" in response_data
+  assert b"toggleProviderMenu" in response_data
+  assert b"handlePickerMenuKeydown" in response_data
+  assert b"selectedModel" in response_data
+  assert b"Recommended remediation" in response_data
+  assert b"witnessDescription" not in response_data
+
+
+def test_styles_include_custom_volume_control_and_three_column_shell(
+  application: Flask,
+) -> None:
+  response = application.test_client().get("/assets/style.css")
+  response_data: bytes = _response_data(response)
+
+  assert response.status_code == 200
+  assert b"grid-template-columns: 285px minmax(560px, 1fr) 310px" in response_data
+  assert b'input[type="range"]::-webkit-slider-thumb' in response_data
+  assert b"var(--fill" in response_data
+  assert b"--inspector-row-height" in response_data
+  assert b"--inspector-menu-shadow" in response_data
   assert (
-    b'elements.providerControl.hidden = isRegex || workflow === "diagnose"'
+    b"radial-gradient(circle, var(--inspector-dot) 0 1.5px, transparent 2px)"
     in response_data
   )
+  assert b"10% 100% repeat-x" in response_data
+  assert b"linear-gradient(#aaa8a2" not in response_data
+  assert b".picker-menu" in response_data
+  assert b".picker-option" in response_data
+  assert b".model-option" in response_data
+  assert b"white-space: pre" in response_data
+  assert b"word-break: normal" in response_data
+  assert b".attachment-action" in response_data
 
 
 def test_capabilities_never_expose_credential_values(
@@ -71,6 +121,11 @@ def test_capabilities_never_expose_credential_values(
   assert response.status_code == 200
   assert "secret-value" not in response.text
   assert payload["storage"] == "browser_local"
+  assert isinstance(payload["version"], str)
+  providers = cast("list[dict[str, object]]", payload["providers"])
+  for provider in providers:
+    models = cast("list[str]", provider["models"])
+    assert provider["defaultModel"] in models
 
 
 def test_samples_are_packaged_and_loadable(application: Flask) -> None:
@@ -122,6 +177,74 @@ def test_validate_rejects_non_json_with_structured_error(application: Flask) -> 
 
   assert response.status_code == 400
   assert "valid JSON" in response.text
+
+
+class FakeScanResult:
+  def to_dict(self) -> dict[str, object]:
+    return {
+      "schemaVersion": 1,
+      "status": "completed",
+      "workflow": "scan",
+      "specificationKind": "natural_language",
+      "summary": {"status": "completed"},
+      "findings": [],
+    }
+
+
+def test_scan_passes_selected_thinking_budget_to_service(
+  application: Flask, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  targets: list[TargetConfig] = []
+
+  def fake_scan_specification(
+    specification_text: str,
+    *,
+    specification_name: str,
+    taxonomy_text: str | None,
+    target: TargetConfig,
+  ) -> FakeScanResult:
+    assert specification_text
+    assert specification_name == "sample.yaml"
+    assert taxonomy_text is None
+    targets.append(target)
+    return FakeScanResult()
+
+  monkeypatch.setattr(webapp_module, "scan_specification", fake_scan_specification)
+  response = application.test_client().post(
+    "/api/v1/scans",
+    json={
+      "specification": {
+        "name": "sample.yaml",
+        "text": "name: sample\nsystem_prompt: help\nrules:\n  - Block harm.\n",
+      },
+      "provider": "gemini",
+      "model": "gemini-test",
+      "thinkingBudget": 70,
+    },
+  )
+
+  assert response.status_code == 200
+  assert len(targets) == 1
+  assert targets[0].thinking_budget == 70
+
+
+@pytest.mark.parametrize("thinking_budget", [-1, 1.5, True])
+def test_scan_rejects_invalid_thinking_budget(
+  application: Flask, thinking_budget: object
+) -> None:
+  response = application.test_client().post(
+    "/api/v1/scans",
+    json={
+      "specification": {
+        "name": "sample.yaml",
+        "text": "name: sample\nsystem_prompt: help\nrules:\n  - Block harm.\n",
+      },
+      "thinkingBudget": thinking_budget,
+    },
+  )
+
+  assert response.status_code == 400
+  assert "thinkingBudget must be a non-negative integer" in response.text
 
 
 def test_regex_scan_runs_without_external_provider(application: Flask) -> None:
