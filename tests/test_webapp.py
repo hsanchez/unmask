@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import BoundedSemaphore
 from typing import cast
 
 import pytest
@@ -7,6 +8,13 @@ from werkzeug.test import TestResponse
 
 from unmask import webapp as webapp_module
 from unmask.config import TargetConfig
+from unmask.repair import (
+  FindingFingerprint,
+  ProposedFix,
+  ProposedFixStatus,
+  ValidationCheck,
+  ValidationStatus,
+)
 from unmask.webapp import MAX_REQUEST_BYTES, create_app, run_local_server
 
 _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -48,8 +56,8 @@ def test_index_serves_studio_with_security_headers(application: Flask) -> None:
   assert b'href="https://github.com/hsanchez/unmask#readme"' in response_data
   assert b'class="analysis-actions"' in response_data
   assert b'id="analyze-button"' in response_data
-  assert b'href="/assets/style.css?v=14"' in response_data
-  assert b'src="/assets/app.js?v=14"' in response_data
+  assert b'href="/assets/style.css?v=20"' in response_data
+  assert b'src="/assets/app.js?v=20"' in response_data
   assert b'id="regex-model-note"' in response_data
   assert b'id="workflow-note"' in response_data
   assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
@@ -80,8 +88,17 @@ def test_assets_disable_cache_for_local_development(application: Flask) -> None:
   assert b"toggleProviderMenu" in response_data
   assert b"handlePickerMenuKeydown" in response_data
   assert b"selectedModel" in response_data
-  assert b"Recommended remediation" in response_data
+  assert b"Recommended remediation" not in response_data
+  assert b"Generate fix" in response_data
+  assert b"Interpretations disagree." in response_data
+  assert b"findingEvidence" in response_data
+  assert b"findingOrigin" in response_data
+  assert b"/api/v1/proposed-fixes" in response_data
+  assert b"proposalDiff" in response_data
   assert b"witnessDescription" not in response_data
+  assert b"Checks passed" in response_data
+  assert b"checked by Unmask against supplied cases" in response_data
+  assert b"Validated fix" not in response_data
 
 
 def test_styles_include_custom_volume_control_and_three_column_shell(
@@ -108,6 +125,11 @@ def test_styles_include_custom_volume_control_and_three_column_shell(
   assert b"white-space: pre" in response_data
   assert b"word-break: normal" in response_data
   assert b".attachment-action" in response_data
+  assert b".finding-footer" in response_data
+  assert b".generate-fix-action" in response_data
+  assert b".finding-origin" in response_data
+  assert b"grid-template-columns: minmax(0, 1fr)" in response_data
+  assert b".finding-card > * { min-width: 0; }" in response_data
 
 
 def test_capabilities_never_expose_credential_values(
@@ -121,6 +143,7 @@ def test_capabilities_never_expose_credential_values(
   assert response.status_code == 200
   assert "secret-value" not in response.text
   assert payload["storage"] == "browser_local"
+  assert cast("dict[str, object]", payload["proposedFixes"])["enabled"] is True
   assert isinstance(payload["version"], str)
   providers = cast("list[dict[str, object]]", payload["providers"])
   for provider in providers:
@@ -284,6 +307,131 @@ def test_regex_diagnosis_runs_without_external_provider(application: Flask) -> N
   assert payload["specificationKind"] == "regex"
   assert cast("dict[str, object]", payload["summary"])["incidents"] == 3
   assert payload["findings"]
+
+
+def test_proposed_fix_endpoint_passes_bound_inputs(
+  application: Flask, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  received: list[dict[str, object]] = []
+
+  def fake_propose_fix(specification_text: str, **kwargs: object) -> ProposedFix:
+    received.append({"specification_text": specification_text, **kwargs})
+    target = cast("TargetConfig", kwargs["target"])
+    return ProposedFix(
+      status=ProposedFixStatus.VALIDATED,
+      specification_kind="regex",
+      finding_fingerprint=FindingFingerprint(
+        specification_kind="regex",
+        workflow="scan",
+        bug_type="over_strict",
+        rule_ids=("block-hack",),
+        finding_id="case:1:over-strict:block-hack",
+      ),
+      original_content_hash="bound-hash",
+      provider=target.provider,
+      model=target.judge_model,
+      revised_specification="kind: regex\n",
+      unified_diff="--- sample.yaml\n+++ sample.yaml\n",
+      validation_checks=(
+        ValidationCheck(
+          code="target_removed",
+          label="Target finding removed",
+          status=ValidationStatus.PASSED,
+        ),
+      ),
+    )
+
+  monkeypatch.setattr(webapp_module, "propose_fix", fake_propose_fix)
+  response = application.test_client().post(
+    "/api/v1/proposed-fixes",
+    json={
+      "specification": {"name": "sample.yaml", "text": "kind: regex\n"},
+      "workflow": "scan",
+      "findingId": "case:1:over-strict:block-hack",
+      "contentHash": "bound-hash",
+      "provider": "openai",
+      "model": "gpt-test",
+      "thinkingBudget": 70,
+    },
+  )
+  payload = cast("dict[str, object]", response.get_json())
+
+  assert response.status_code == 200
+  assert payload["status"] == "validated"
+  assert received[0]["expected_content_hash"] == "bound-hash"
+  target = cast("TargetConfig", received[0]["target"])
+  assert (target.provider, target.judge_model, target.thinking_budget) == (
+    "openai",
+    "gpt-test",
+    70,
+  )
+
+
+def test_proposed_fix_endpoint_reports_stale_analysis(
+  application: Flask, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  def stale(*args: object, **kwargs: object) -> ProposedFix:
+    del args, kwargs
+    raise LookupError("analysis inputs changed")
+
+  monkeypatch.setattr(webapp_module, "propose_fix", stale)
+  response = application.test_client().post(
+    "/api/v1/proposed-fixes",
+    json={
+      "specification": {"name": "sample.yaml", "text": "kind: regex\n"},
+      "workflow": "scan",
+      "findingId": "finding",
+      "contentHash": "old",
+    },
+  )
+
+  assert response.status_code == 409
+  assert "stale_analysis" in response.text
+
+
+@pytest.mark.parametrize(
+  "headers",
+  [
+    {"Origin": "https://attacker.example"},
+    {"Origin": "null"},
+    {"Sec-Fetch-Site": "cross-site"},
+  ],
+)
+def test_proposed_fix_endpoint_rejects_cross_origin_requests(
+  application: Flask, headers: dict[str, str]
+) -> None:
+  response = application.test_client().post(
+    "/api/v1/proposed-fixes", json={}, headers=headers
+  )
+
+  assert response.status_code == 403
+  assert "invalid_origin" in response.text
+
+
+def test_studio_rejects_untrusted_host(application: Flask) -> None:
+  response = application.test_client().get("/", headers={"Host": "attacker.example"})
+
+  assert response.status_code == 400
+
+
+def test_proposed_fix_endpoint_limits_concurrent_generation(application: Flask) -> None:
+  slots = cast("BoundedSemaphore", application.extensions["unmask_proposed_fix_slots"])
+  assert slots.acquire(blocking=False)
+  try:
+    response = application.test_client().post(
+      "/api/v1/proposed-fixes",
+      json={
+        "specification": {"name": "sample.yaml", "text": "kind: regex\n"},
+        "workflow": "scan",
+        "findingId": "finding",
+        "contentHash": "hash",
+      },
+    )
+  finally:
+    slots.release()
+
+  assert response.status_code == 429
+  assert "proposed_fix_busy" in response.text
 
 
 def test_diagnosis_rejects_natural_language_specifications(

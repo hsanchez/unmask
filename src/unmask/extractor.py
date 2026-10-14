@@ -148,7 +148,7 @@ class SemanticExtractor:
       raw: str = self._backend.judge(
         prompt,
         max_tokens=self._max_output_tokens,
-      )
+      ).text
       try:
         parsed: object = cast("object", json.loads(_json_object(raw)))
         model: SymbolicModel = SymbolicModel.from_dict(parsed)

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
+import time
 import webbrowser
 from collections.abc import Callable
 from importlib.metadata import PackageNotFoundError, version
 from importlib.resources import files
+from threading import BoundedSemaphore
 from typing import Protocol, cast
 
 import yaml
@@ -16,17 +19,20 @@ from werkzeug.exceptions import BadRequest, RequestEntityTooLarge, UnsupportedMe
 from werkzeug.serving import make_server
 
 from .config import TargetConfig
+from .repair import PROPOSED_FIX_SCHEMA_VERSION, RepairGenerationError
 from .service import (
   DEFAULT_MODELS,
   PROVIDER_MODELS,
   ScanResult,
   diagnose_specification,
+  propose_fix,
   scan_specification,
   validate_specification,
 )
 
 MAX_REQUEST_BYTES = 1_000_000
 DEFAULT_PORT = 8765
+logger = logging.getLogger(__name__)
 
 
 def _application_version() -> str:
@@ -110,6 +116,24 @@ def _provider_configured(provider: str) -> bool:
   return bool(os.getenv(env_var))
 
 
+def _target_config(data: dict[str, object]) -> TargetConfig:
+  provider: object = data.get("provider", "gemini")
+  if not isinstance(provider, str) or provider not in DEFAULT_MODELS:
+    raise ValueError(f"unsupported provider: {provider!r}")
+  model: object = data.get("model", DEFAULT_MODELS[provider])
+  if not isinstance(model, str) or not model.strip():
+    raise ValueError("model must be a non-empty string")
+  return TargetConfig(
+    project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+    location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
+    judge_model=model.strip(),
+    thinking_budget=_integer(
+      data.get("thinkingBudget"), field="thinkingBudget", default=128
+    ),
+    provider=provider,
+  )
+
+
 def _packaged_text(name: str) -> str:
   return files("unmask").joinpath("web", "samples", name).read_text(encoding="utf-8")
 
@@ -144,6 +168,9 @@ def create_app() -> Flask:
   application.config["JSON_SORT_KEYS"] = False
   application.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
   application.config["TEMPLATES_AUTO_RELOAD"] = True
+  application.config["TRUSTED_HOSTS"] = ["127.0.0.1", "localhost", "[::1]"]
+  proposed_fix_slots = BoundedSemaphore(value=1)
+  application.extensions["unmask_proposed_fix_slots"] = proposed_fix_slots
 
   def security_headers(response: Response) -> Response:
     response.headers["Content-Security-Policy"] = (
@@ -191,6 +218,13 @@ def create_app() -> Flask:
         "providers": providers,
         "maxRequestBytes": MAX_REQUEST_BYTES,
         "storage": "browser_local",
+        "proposedFixes": {
+          "enabled": True,
+          "schemaVersion": PROPOSED_FIX_SCHEMA_VERSION,
+          "workflows": ["scan", "diagnose"],
+          "specificationKinds": ["natural_language", "regex"],
+          "applySupported": False,
+        },
       }
     )
 
@@ -242,25 +276,12 @@ def create_app() -> Flask:
         data.get("specification"), field="specification"
       )
       taxonomy = _optional_document(data.get("taxonomy"), field="taxonomy")
-      provider: object = data.get("provider", "gemini")
-      if not isinstance(provider, str) or provider not in DEFAULT_MODELS:
-        raise ValueError(f"unsupported provider: {provider!r}")
-      model: object = data.get("model", DEFAULT_MODELS[provider])
-      if not isinstance(model, str) or not model.strip():
-        raise ValueError("model must be a non-empty string")
+      target: TargetConfig = _target_config(data)
       result: ScanResult = scan_specification(
         specification_text,
         specification_name=specification_name,
         taxonomy_text=taxonomy[1] if taxonomy is not None else None,
-        target=TargetConfig(
-          project=os.getenv("GOOGLE_CLOUD_PROJECT"),
-          location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"),
-          judge_model=model.strip(),
-          thinking_budget=_integer(
-            data.get("thinkingBudget"), field="thinkingBudget", default=128
-          ),
-          provider=provider,
-        ),
+        target=target,
       )
       return jsonify(result.to_dict())
     except (TypeError, ValueError, yaml.YAMLError) as exc:
@@ -290,6 +311,102 @@ def create_app() -> Flask:
       return _error(str(exc), code="diagnosis_failed", status=422)
 
   application.add_url_rule("/api/v1/diagnoses", methods=("POST",), view_func=diagnoses)
+
+  def proposed_fixes() -> tuple[Response, int] | Response:
+    origin: str | None = request.headers.get("Origin")
+    if (
+      origin is not None and origin != request.host_url.rstrip("/")
+    ) or request.headers.get("Sec-Fetch-Site") == "cross-site":
+      return _error(
+        "cross-origin repair requests are not allowed",
+        code="invalid_origin",
+        status=403,
+      )
+    if not proposed_fix_slots.acquire(blocking=False):
+      return _error(
+        "another proposed fix is already being checked",
+        code="proposed_fix_busy",
+        status=429,
+      )
+    started: float = time.perf_counter()
+    try:
+      data: dict[str, object] = _json_object()
+      _only_fields(
+        data,
+        frozenset(
+          {
+            "specification",
+            "taxonomy",
+            "violations",
+            "workflow",
+            "findingId",
+            "contentHash",
+            "provider",
+            "model",
+            "thinkingBudget",
+          }
+        ),
+      )
+      specification_name, specification_text = _document(
+        data.get("specification"), field="specification"
+      )
+      taxonomy = _optional_document(data.get("taxonomy"), field="taxonomy")
+      violations = _optional_document(data.get("violations"), field="violations")
+      workflow: object = data.get("workflow")
+      if workflow not in ("scan", "diagnose"):
+        raise ValueError("workflow must be 'scan' or 'diagnose'")
+      finding_id: object = data.get("findingId")
+      if not isinstance(finding_id, str) or not finding_id:
+        raise ValueError("findingId must be a non-empty string")
+      requested_hash: object = data.get("contentHash")
+      if not isinstance(requested_hash, str) or not requested_hash:
+        raise ValueError("contentHash must be a non-empty string")
+      target: TargetConfig = _target_config(data)
+      result = propose_fix(
+        specification_text,
+        specification_name=specification_name,
+        taxonomy_text=taxonomy[1] if taxonomy is not None else None,
+        violations_text=violations[1] if violations is not None else None,
+        workflow=workflow,
+        finding_id=finding_id,
+        expected_content_hash=requested_hash,
+        target=target,
+      )
+      logger.info(
+        "proposed-fix request completed",
+        extra={
+          "workflow": workflow,
+          "finding_id": finding_id,
+          "fix_status": result.status.value,
+          "unavailable_reasons": [
+            reason.value for reason in result.unavailable_reasons
+          ],
+        },
+      )
+      return jsonify(result.to_dict())
+    except LookupError as exc:
+      return _error(str(exc), code="stale_analysis", status=409)
+    except RepairGenerationError as exc:
+      logger.warning("proposed-fix generation failed", exc_info=True)
+      return _error(str(exc), code="proposed_fix_failed", status=422)
+    except (TypeError, ValueError, yaml.YAMLError) as exc:
+      logger.warning("proposed-fix input or validation failed", exc_info=True)
+      return _error(str(exc), code="invalid_proposed_fix", status=400)
+    except RuntimeError as exc:
+      logger.warning("proposed-fix execution failed", exc_info=True)
+      return _error(str(exc), code="proposed_fix_failed", status=422)
+    finally:
+      proposed_fix_slots.release()
+      logger.info(
+        "proposed-fix slot released",
+        extra={
+          "latency_ms": round((time.perf_counter() - started) * 1_000),
+        },
+      )
+
+  application.add_url_rule(
+    "/api/v1/proposed-fixes", methods=("POST",), view_func=proposed_fixes
+  )
 
   return application
 

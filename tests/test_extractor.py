@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from unmask.backend import JudgeResponse
 from unmask.extractor import SemanticExtractor, build_extraction_prompt
 from unmask.models import Guardrail, GuardrailRule
 
@@ -25,10 +26,10 @@ class FakeBackend:
     self._responses: list[str] = list(responses)
     self.prompts: list[str] = []
 
-  def judge(self, prompt: str, *, max_tokens: int = 8192) -> str:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
     del max_tokens
     self.prompts.append(prompt)
-    return self._responses.pop(0)
+    return JudgeResponse(self._responses.pop(0))
 
 
 def _guardrail() -> Guardrail:

@@ -7,6 +7,7 @@ import pytest
 
 import unmask.cli as cli_module
 from tests.helpers import write_yaml
+from unmask.backend import JudgeResponse
 from unmask.cli import main
 from unmask.config import TargetConfig
 from unmask.models import SymbolicModel
@@ -71,21 +72,23 @@ class FakeBackend:
     self.config: TargetConfig = config
     self.prompts: list[str] = []
 
-  def judge(self, prompt: str, *, max_tokens: int = 8192) -> str:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
     del max_tokens
     self.prompts.append(prompt)
-    return json.dumps(
-      {
-        "predicates": {"is_educational": "request seeks neutral education"},
-        "safe_condition": [[{"predicate": "is_educational", "value": True}]],
-        "rules": [
-          {
-            "rule_id": "rule:1",
-            "decision": "block",
-            "condition": [[{"predicate": "is_educational", "value": False}]],
-          }
-        ],
-      }
+    return JudgeResponse(
+      json.dumps(
+        {
+          "predicates": {"is_educational": "request seeks neutral education"},
+          "safe_condition": [[{"predicate": "is_educational", "value": True}]],
+          "rules": [
+            {
+              "rule_id": "rule:1",
+              "decision": "block",
+              "condition": [[{"predicate": "is_educational", "value": False}]],
+            }
+          ],
+        }
+      )
     )
 
 

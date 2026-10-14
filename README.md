@@ -85,6 +85,48 @@ Source highlighting initially maps findings to complete YAML rule values. Hover,
 focus, or select either a source rule or finding card to reveal its relationships in
 the opposite pane.
 
+Each supported finding can request a **Proposed fix** from the selected provider.
+The provider returns replacements for the affected rules only. Unmask constructs the
+complete candidate specification, validates its YAML and rule syntax, reruns the
+analysis, checks every supplied labeled example, and rejects candidates that retain
+the target finding or introduce a new supported finding. Only candidates that pass
+these bounded checks appear as a copyable unified diff; the studio does not apply or
+write the change.
+
+Proposed-fix generation is an explicit external-model action. For regex policies,
+Scan and Diagnose remain local, while generating a fix sends the affected rules,
+finding evidence, labeled examples, optional taxonomy, and attached incidents to the
+selected provider. Z3 verifies consistency and witness conditions after the candidate
+is built; it does not author the replacement.
+
+Natural-language fixes require trusted labeled examples and two stable semantic
+extractions and example evaluations. Inline `examples` qualify. A taxonomy can add
+cases with this versioned shape:
+
+```yaml
+policy_examples_version: 1
+policy_examples:
+  - content: Anthropic will invest up to $2 billion.
+    should_block: false
+    reasoning: Neutral third-party reporting is allowed.
+```
+
+Z3 proves properties of the newly extracted Boolean model, not of prose directly.
+When evidence is missing, extraction is unstable, labels regress, or verification
+fails, the studio reports that no sufficiently supported automatic fix is available.
+
+Specification, taxonomy, incident, and example text is untrusted model input. Unmask
+delimits it in repair prompts and never executes instructions from it, but that text
+can still influence the proposed edit. Supplied example labels are the regression
+oracle, not a general proof of real-world policy coverage. Review every diff before
+using it and only attach taxonomy and incident files from sources you trust.
+
+Repair evaluation hides inline example labels from the classifier. Provider calls
+use a 60-second timeout with automatic SDK retries disabled; a repair stops starting
+new model calls after five minutes. The single repair slot is per server process.
+Cancelling in the browser stops waiting; an in-flight server call runs until it
+finishes or times out. Custom judge backends return `JudgeResponse(text, usage)`.
+
 ### Scan a specification
 
 ```bash

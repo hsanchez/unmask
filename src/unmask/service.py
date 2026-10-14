@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
+import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +17,7 @@ from yaml.error import Mark
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
 from .analyzer import SymbolicAnalyzer
-from .backend import JudgeBackend, create_backend
+from .backend import JudgeBackend, JudgeResponse, create_backend
 from .config import TargetConfig, load_guardrail_text
 from .diagnosis import (
   ConversationIncident,
@@ -28,7 +31,25 @@ from .diagnosis import (
 from .extractor import SemanticExtractor
 from .importer import ImportedViolation, load_violations_text
 from .models import Finding, Guardrail, SymbolicModel
-from .scanning import RegexScanReport, scan_regex_manifest
+from .repair import (
+  CandidateEdit,
+  FindingFingerprint,
+  PolicyExampleEvaluator,
+  ProposedFix,
+  ProposedFixStatus,
+  RepairCandidateGenerator,
+  RepairGenerationError,
+  TrustedPolicyExample,
+  UnavailableReason,
+  ValidationCheck,
+  ValidationStatus,
+  apply_candidate_edit,
+  content_hash,
+  merge_policy_examples,
+  parse_taxonomy_policy_examples,
+  unified_specification_diff,
+)
+from .scanning import RegexScanCase, RegexScanReport, scan_regex_manifest
 
 type SpecificationKind = Literal["natural_language", "regex"]
 type AnalysisWorkflow = Literal["scan", "diagnose"]
@@ -54,6 +75,8 @@ PROVIDER_MODELS: dict[str, tuple[str, ...]] = {
 DEFAULT_MODELS: dict[str, str] = {
   provider: models[0] for provider, models in PROVIDER_MODELS.items()
 }
+
+logger = logging.getLogger(__name__)
 
 _compose_yaml = cast("Callable[[str], object]", yaml.compose)
 
@@ -422,16 +445,20 @@ def scan_specification(
   validation: ValidationResult = validate_specification(
     specification_text, name=specification_name
   )
-  content_hash: str = _stable_hash(
-    {
-      "schemaVersion": 1,
-      "specification": specification_text,
-      "taxonomy": taxonomy_text,
-      "provider": target.provider,
-      "model": target.judge_model,
-      "thinkingBudget": target.thinking_budget,
-    }
-  )
+  binding: dict[str, object] = {
+    "schemaVersion": 1,
+    "specification": specification_text,
+    "taxonomy": taxonomy_text,
+  }
+  if validation.specification_kind == "natural_language":
+    binding.update(
+      {
+        "provider": target.provider,
+        "model": target.judge_model,
+        "thinkingBudget": target.thinking_budget,
+      }
+    )
+  content_hash: str = _stable_hash(binding)
   if validation.specification_kind == "natural_language":
     guardrail: Guardrail = load_guardrail_text(specification_text)
     taxonomy: object | None = (
@@ -591,4 +618,623 @@ def diagnose_specification(
     findings=findings,
     workflow="diagnose",
     diagnosis_reports=reports,
+  )
+
+
+def _finding_fingerprint(
+  finding: UiFinding,
+  *,
+  specification_kind: SpecificationKind,
+  workflow: AnalysisWorkflow,
+) -> FindingFingerprint:
+  example: object | None = finding.metadata.get("exampleContent")
+  return FindingFingerprint(
+    specification_kind=specification_kind,
+    workflow=workflow,
+    bug_type=finding.bug_type,
+    rule_ids=tuple(sorted(finding.rule_ids)),
+    finding_id=finding.id,
+    case_index=cast("int | None", finding.metadata.get("caseIndex")),
+    example_content_hash=(content_hash(example) if isinstance(example, str) else None),
+  )
+
+
+def _finding_signatures(
+  result: ScanResult,
+) -> set[tuple[str, tuple[str, ...], str | None]]:
+  return {
+    _finding_fingerprint(
+      finding,
+      specification_kind=result.specification_kind,
+      workflow=result.workflow,
+    ).signature()
+    for finding in result.findings
+  }
+
+
+def _unavailable_fix(
+  *,
+  fingerprint: FindingFingerprint,
+  original_content_hash: str,
+  target: TargetConfig,
+  checks: list[ValidationCheck],
+  reasons: tuple[UnavailableReason, ...],
+  explanation: str | None = None,
+) -> ProposedFix:
+  return ProposedFix(
+    status=ProposedFixStatus.UNAVAILABLE,
+    specification_kind=fingerprint.specification_kind,
+    finding_fingerprint=fingerprint,
+    original_content_hash=original_content_hash,
+    provider=target.provider,
+    model=target.judge_model,
+    validation_checks=tuple(checks),
+    unavailable_reasons=reasons,
+    explanation=explanation,
+  )
+
+
+def _affected_rules(
+  specification_text: str,
+  *,
+  kind: SpecificationKind,
+  rule_ids: tuple[str, ...],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+  if kind == "natural_language":
+    guardrail: Guardrail = load_guardrail_text(specification_text)
+    rules: dict[str, object] = {
+      rule.id: rule.text for rule in guardrail.rules if rule.id in rule_ids
+    }
+    examples: list[dict[str, object]] = [
+      {
+        "content": example.content,
+        "should_block": example.should_block,
+        "reasoning": example.reasoning,
+      }
+      for example in guardrail.examples
+    ]
+    return rules, examples
+  manifest: RegexManifest = RegexManifest.from_text(specification_text)
+  regex_rules: dict[str, object] = {
+    rule.id: rule.to_dict() for rule in manifest.rules if rule.id in rule_ids
+  }
+  regex_examples: list[dict[str, object]] = [
+    cast("dict[str, object]", example.to_dict()) for example in manifest.examples
+  ]
+  return regex_rules, regex_examples
+
+
+def _expected_outcome_passes(expected: str, actions: set[str]) -> bool:
+  opposite: str = "allow" if expected == "block" else "block"
+  expected_is_supported: bool = expected == "allow" or expected in actions
+  return expected_is_supported and opposite not in actions
+
+
+def _regex_case_passes(case: RegexScanCase) -> bool:
+  actions: set[str] = {match.action for match in case.diagnosis.matches}
+  return _expected_outcome_passes(case.example.expected_action, actions)
+
+
+def _regex_examples_retained(
+  baseline: RegexScanReport,
+  revised: RegexScanReport,
+  *,
+  target_example_hash: str | None,
+) -> tuple[bool, int]:
+  required_cases = [
+    (index, case)
+    for index, case in enumerate(baseline.cases)
+    if _regex_case_passes(case)
+    or content_hash(case.example.content) == target_example_hash
+  ]
+  retained: bool = all(
+    index < len(revised.cases)
+    and revised.cases[index].example == case.example
+    and _regex_case_passes(revised.cases[index])
+    for index, case in required_cases
+  )
+  return retained, len(required_cases)
+
+
+def _diagnosis_case_passes(report: DiagnosisReport) -> bool:
+  expected = report.incident.expected_outcome
+  if expected is None:
+    return False
+  actions: set[str] = {match.action for match in report.matches}
+  return _expected_outcome_passes(expected, actions)
+
+
+def _diagnosis_cases_retained(
+  baseline: tuple[DiagnosisReport, ...],
+  revised: tuple[DiagnosisReport, ...],
+  *,
+  target_example_hash: str | None,
+) -> tuple[bool, int]:
+  required_reports = [
+    (index, report)
+    for index, report in enumerate(baseline)
+    if _diagnosis_case_passes(report)
+    or content_hash(report.incident.text) == target_example_hash
+  ]
+  retained: bool = bool(required_reports) and all(
+    index < len(revised)
+    and revised[index].incident == report.incident
+    and (
+      _diagnosis_case_passes(revised[index])
+      or revised[index].incident.expected_outcome is None
+    )
+    for index, report in required_reports
+  )
+  return retained, len(required_reports)
+
+
+def _natural_finding_signatures(
+  findings: list[Finding],
+) -> set[tuple[str, tuple[str, ...]]]:
+  return {(finding.bug_type, tuple(sorted(finding.rule_ids))) for finding in findings}
+
+
+def _natural_rule_semantics(model: SymbolicModel) -> dict[str, tuple[object, ...]]:
+  semantics: dict[str, tuple[object, ...]] = {}
+  for rule in model.rules:
+    predicate_names = {
+      literal.predicate for clause in rule.condition for literal in clause
+    }
+    predicate_meanings = tuple(
+      sorted((name, model.predicates[name]) for name in predicate_names)
+    )
+    semantics[rule.rule_id] = (rule.decision, rule.condition, predicate_meanings)
+  return semantics
+
+
+class _ObservedBackend:
+  def __init__(
+    self,
+    backend: JudgeBackend,
+    *,
+    target: TargetConfig,
+    call_numbers: itertools.count[int],
+    deadline: float,
+  ) -> None:
+    self._backend: JudgeBackend = backend
+    self._target: TargetConfig = target
+    self._call_numbers: itertools.count[int] = call_numbers
+    self._deadline: float = deadline
+
+  def _log_fields(
+    self,
+    *,
+    call_number: int,
+    started: float,
+    max_tokens: int,
+  ) -> dict[str, object]:
+    return {
+      "provider": self._target.provider,
+      "model": self._target.judge_model,
+      "call_number": call_number,
+      "latency_ms": round((time.perf_counter() - started) * 1_000),
+      "requested_max_tokens": max_tokens,
+    }
+
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
+    if time.perf_counter() >= self._deadline:
+      raise RuntimeError("proposed-fix generation exceeded its time budget")
+    call_number: int = next(self._call_numbers)
+    started: float = time.perf_counter()
+    try:
+      response: JudgeResponse = self._backend.judge(prompt, max_tokens=max_tokens)
+    except Exception as exc:
+      logger.exception(
+        "proposed-fix model call failed",
+        extra=self._log_fields(
+          call_number=call_number, started=started, max_tokens=max_tokens
+        ),
+      )
+      raise RuntimeError("model provider call failed; see server logs") from exc
+    log_fields = self._log_fields(
+      call_number=call_number, started=started, max_tokens=max_tokens
+    )
+    log_fields["output_characters"] = len(response.text)
+    if response.usage is not None:
+      log_fields.update(response.usage.to_dict())
+    logger.info("proposed-fix model call completed", extra=log_fields)
+    return response
+
+
+@dataclass(frozen=True)
+class _FixValidation:
+  checks: tuple[ValidationCheck, ...]
+  reasons: tuple[UnavailableReason, ...]
+
+
+def _validation_check(code: str, label: str, passed: bool) -> ValidationCheck:
+  return ValidationCheck(
+    code=code,
+    label=label,
+    status=ValidationStatus.PASSED if passed else ValidationStatus.FAILED,
+  )
+
+
+def _validate_regex_fix(
+  *,
+  baseline: ScanResult,
+  revised: str,
+  specification_text: str,
+  specification_name: str,
+  taxonomy_text: str | None,
+  violations_text: str | None,
+  workflow: AnalysisWorkflow,
+  target: TargetConfig,
+  backend_factory: BackendFactory,
+  fingerprint: FindingFingerprint,
+) -> _FixValidation:
+  baseline_scan: ScanResult = (
+    baseline
+    if workflow == "scan"
+    else scan_specification(
+      specification_text,
+      specification_name=specification_name,
+      taxonomy_text=taxonomy_text,
+      target=target,
+      backend_factory=backend_factory,
+    )
+  )
+  revised_scan: ScanResult = scan_specification(
+    revised,
+    specification_name=specification_name,
+    taxonomy_text=taxonomy_text,
+    target=target,
+    backend_factory=backend_factory,
+  )
+  revised_result: ScanResult = (
+    diagnose_specification(
+      revised,
+      cast("str", violations_text),
+      specification_name=specification_name,
+    )
+    if workflow == "diagnose"
+    else revised_scan
+  )
+  revised_signatures = _finding_signatures(revised_result)
+  target_removed: bool = fingerprint.signature() not in revised_signatures
+  no_new_workflow_findings: bool = not (
+    revised_signatures - _finding_signatures(baseline)
+  )
+  no_new_scan_findings: bool = not (
+    _finding_signatures(revised_scan) - _finding_signatures(baseline_scan)
+  )
+  no_new_findings: bool = no_new_workflow_findings and no_new_scan_findings
+
+  scan_examples_pass: bool = False
+  scan_case_count: int = 0
+  if baseline_scan.regex_report is not None and revised_scan.regex_report is not None:
+    scan_examples_pass, scan_case_count = _regex_examples_retained(
+      baseline_scan.regex_report,
+      revised_scan.regex_report,
+      target_example_hash=fingerprint.example_content_hash,
+    )
+
+  diagnosis_examples_pass: bool = False
+  diagnosis_case_count: int = 0
+  if (
+    workflow == "diagnose"
+    and baseline.diagnosis_reports is not None
+    and revised_result.diagnosis_reports is not None
+  ):
+    diagnosis_examples_pass, diagnosis_case_count = _diagnosis_cases_retained(
+      baseline.diagnosis_reports,
+      revised_result.diagnosis_reports,
+      target_example_hash=fingerprint.example_content_hash,
+    )
+
+  trusted_case_count: int = scan_case_count + diagnosis_case_count
+  examples_pass: bool = (scan_case_count == 0 or scan_examples_pass) and (
+    diagnosis_case_count == 0 or diagnosis_examples_pass
+  )
+  checks: tuple[ValidationCheck, ...] = (
+    _validation_check("target_removed", "Target finding removed", target_removed),
+    _validation_check(
+      "examples_retained",
+      f"{trusted_case_count} trusted cases retained",
+      examples_pass,
+    ),
+    _validation_check("no_new_findings", "No new supported findings", no_new_findings),
+  )
+  reasons: list[UnavailableReason] = []
+  if not target_removed:
+    reasons.append(UnavailableReason.TARGET_FINDING_REMAINS)
+  if not examples_pass:
+    reasons.append(UnavailableReason.REGRESSION)
+  if not no_new_findings:
+    reasons.append(UnavailableReason.NEW_FINDINGS)
+  return _FixValidation(checks=checks, reasons=tuple(reasons))
+
+
+def _validate_natural_fix(
+  *,
+  baseline: ScanResult,
+  revised: str,
+  taxonomy_text: str | None,
+  finding: UiFinding,
+  fingerprint: FindingFingerprint,
+  backend: JudgeBackend,
+  trusted_examples: tuple[TrustedPolicyExample, ...],
+) -> _FixValidation:
+  if baseline.symbolic_model is None:
+    raise RuntimeError("natural-language baseline is missing its symbolic model")
+  revised_guardrail: Guardrail = load_guardrail_text(revised)
+  taxonomy: object | None = (
+    cast("object", yaml.safe_load(taxonomy_text)) if taxonomy_text is not None else None
+  )
+  try:
+    first_model: SymbolicModel = SemanticExtractor(backend).extract(
+      revised_guardrail, taxonomy
+    )
+    second_model: SymbolicModel = SemanticExtractor(backend).extract(
+      revised_guardrail, taxonomy
+    )
+  except (TypeError, ValueError) as exc:
+    raise RepairGenerationError(
+      f"invalid proposed-fix semantic extraction: {exc}"
+    ) from exc
+
+  first_findings: list[Finding] = SymbolicAnalyzer(
+    first_model, revised_guardrail
+  ).analyze()
+  second_findings: list[Finding] = SymbolicAnalyzer(
+    second_model, revised_guardrail
+  ).analyze()
+  stable: bool = first_model == second_model and _natural_finding_signatures(
+    first_findings
+  ) == _natural_finding_signatures(second_findings)
+  evaluator = PolicyExampleEvaluator(backend)
+  try:
+    first_outcomes = evaluator.evaluate(revised, trusted_examples)
+    second_outcomes = evaluator.evaluate(revised, trusted_examples)
+  except (TypeError, ValueError) as exc:
+    raise RepairGenerationError(
+      f"invalid proposed-fix example evaluation: {exc}"
+    ) from exc
+  stable = stable and first_outcomes == second_outcomes
+  examples_pass: bool = stable and all(
+    outcome[0] == example.should_block
+    for outcome, example in zip(first_outcomes, trusted_examples, strict=True)
+  )
+
+  baseline_signatures: set[tuple[str, tuple[str, ...]]] = {
+    (item.bug_type, tuple(sorted(item.rule_ids))) for item in baseline.findings
+  }
+  revised_signatures = _natural_finding_signatures(first_findings)
+  target_removed: bool = (
+    fingerprint.bug_type,
+    fingerprint.rule_ids,
+  ) not in revised_signatures
+  no_new_findings: bool = not (revised_signatures - baseline_signatures)
+  baseline_semantics = _natural_rule_semantics(baseline.symbolic_model)
+  revised_semantics = _natural_rule_semantics(first_model)
+  unaffected_preserved: bool = all(
+    revised_semantics.get(rule_id) == semantics
+    for rule_id, semantics in baseline_semantics.items()
+    if rule_id not in finding.rule_ids
+  )
+  checks: tuple[ValidationCheck, ...] = (
+    _validation_check("stable_extraction", "Stable symbolic extraction", stable),
+    _validation_check(
+      "examples_retained",
+      f"{len(trusted_examples)} trusted examples retained",
+      examples_pass,
+    ),
+    _validation_check(
+      "unaffected_rules",
+      "Unaffected rule semantics preserved",
+      unaffected_preserved,
+    ),
+    _validation_check("target_removed", "Target finding removed", target_removed),
+    _validation_check("no_new_findings", "No new supported findings", no_new_findings),
+  )
+  reasons: list[UnavailableReason] = []
+  if not stable:
+    reasons.append(UnavailableReason.UNSTABLE_EXTRACTION)
+  if not examples_pass or not unaffected_preserved:
+    reasons.append(UnavailableReason.REGRESSION)
+  if not target_removed:
+    reasons.append(UnavailableReason.TARGET_FINDING_REMAINS)
+  if not no_new_findings:
+    reasons.append(UnavailableReason.NEW_FINDINGS)
+  return _FixValidation(
+    checks=checks,
+    reasons=tuple(dict.fromkeys(reasons)),
+  )
+
+
+def propose_fix(
+  specification_text: str,
+  *,
+  specification_name: str,
+  taxonomy_text: str | None,
+  violations_text: str | None,
+  workflow: AnalysisWorkflow,
+  finding_id: str,
+  expected_content_hash: str,
+  target: TargetConfig,
+  backend_factory: BackendFactory = create_backend,
+) -> ProposedFix:
+  """Generate and validate one concrete specification patch.
+
+  Raises:
+    LookupError: if the requested finding or analysis binding is stale.
+    RuntimeError: if a configured provider cannot execute.
+    TypeError: if an input or provider response has the wrong shape.
+    ValueError: if an input or provider response is invalid.
+    yaml.YAMLError: if YAML input is malformed.
+  """
+  call_numbers = itertools.count(1)
+  deadline: float = time.perf_counter() + 300
+
+  def observed_backend_factory(config: TargetConfig) -> JudgeBackend:
+    return _ObservedBackend(
+      backend_factory(config),
+      target=config,
+      call_numbers=call_numbers,
+      deadline=deadline,
+    )
+
+  if workflow == "diagnose":
+    if violations_text is None:
+      raise ValueError("violations are required for diagnosis proposed fixes")
+    baseline: ScanResult = diagnose_specification(
+      specification_text,
+      violations_text,
+      specification_name=specification_name,
+    )
+  else:
+    baseline = scan_specification(
+      specification_text,
+      specification_name=specification_name,
+      taxonomy_text=taxonomy_text,
+      target=target,
+      backend_factory=observed_backend_factory,
+    )
+  if baseline.content_hash != expected_content_hash:
+    raise LookupError("analysis inputs changed; run the analysis again")
+  try:
+    finding: UiFinding = next(
+      item for item in baseline.findings if item.id == finding_id
+    )
+  except StopIteration as exc:
+    raise LookupError("finding is no longer present; run the analysis again") from exc
+  fingerprint: FindingFingerprint = _finding_fingerprint(
+    finding,
+    specification_kind=baseline.specification_kind,
+    workflow=workflow,
+  )
+  checks: list[ValidationCheck] = []
+  trusted_policy_examples: tuple[TrustedPolicyExample, ...] = ()
+  if baseline.specification_kind == "natural_language":
+    guardrail: Guardrail = load_guardrail_text(specification_text)
+    taxonomy_examples = (
+      parse_taxonomy_policy_examples(taxonomy_text) if taxonomy_text is not None else ()
+    )
+    trusted_policy_examples = merge_policy_examples(
+      guardrail.examples, taxonomy_examples
+    )
+    if not trusted_policy_examples:
+      checks.append(
+        ValidationCheck(
+          code="trusted_examples",
+          label="Trusted examples available",
+          status=ValidationStatus.FAILED,
+        )
+      )
+      return _unavailable_fix(
+        fingerprint=fingerprint,
+        original_content_hash=baseline.content_hash,
+        target=target,
+        checks=checks,
+        reasons=(UnavailableReason.INSUFFICIENT_EVIDENCE,),
+      )
+
+  backend: JudgeBackend = observed_backend_factory(target)
+  affected_rules, prompt_examples = _affected_rules(
+    specification_text,
+    kind=baseline.specification_kind,
+    rule_ids=finding.rule_ids,
+  )
+  if baseline.specification_kind == "natural_language":
+    prompt_examples = [item.to_dict() for item in trusted_policy_examples]
+  candidate: CandidateEdit = RepairCandidateGenerator(backend).generate(
+    specification_kind=baseline.specification_kind,
+    finding=finding.to_dict(),
+    affected_rules=affected_rules,
+    examples=prompt_examples,
+    expected_rule_ids=finding.rule_ids,
+  )
+  ranges: dict[str, tuple[int, int]] = {
+    unit.rule_id: (unit.start, unit.end) for unit in baseline.document.structural_units
+  }
+  try:
+    revised: str = apply_candidate_edit(
+      specification_text,
+      candidate=candidate,
+      specification_kind=baseline.specification_kind,
+      rule_ranges=ranges,
+    )
+    revised_validation: ValidationResult = validate_specification(
+      revised, name=specification_name
+    )
+    if (
+      revised_validation.specification_kind != baseline.specification_kind
+      or revised_validation.name != baseline.name
+    ):
+      raise ValueError("candidate changed specification identity")
+  except (TypeError, ValueError, yaml.YAMLError) as exc:
+    checks.append(
+      ValidationCheck(
+        code="valid_specification",
+        label="Specification valid",
+        status=ValidationStatus.FAILED,
+        detail=str(exc),
+      )
+    )
+    return _unavailable_fix(
+      fingerprint=fingerprint,
+      original_content_hash=baseline.content_hash,
+      target=target,
+      checks=checks,
+      reasons=(UnavailableReason.INVALID_CANDIDATE,),
+    )
+  checks.append(
+    ValidationCheck(
+      code="valid_specification",
+      label="YAML and specification valid",
+      status=ValidationStatus.PASSED,
+    )
+  )
+
+  if baseline.specification_kind == "regex":
+    fix_validation: _FixValidation = _validate_regex_fix(
+      baseline=baseline,
+      revised=revised,
+      specification_text=specification_text,
+      specification_name=specification_name,
+      taxonomy_text=taxonomy_text,
+      violations_text=violations_text,
+      workflow=workflow,
+      target=target,
+      backend_factory=observed_backend_factory,
+      fingerprint=fingerprint,
+    )
+  else:
+    fix_validation = _validate_natural_fix(
+      baseline=baseline,
+      revised=revised,
+      taxonomy_text=taxonomy_text,
+      finding=finding,
+      fingerprint=fingerprint,
+      backend=backend,
+      trusted_examples=trusted_policy_examples,
+    )
+  checks.extend(fix_validation.checks)
+  if fix_validation.reasons:
+    return _unavailable_fix(
+      fingerprint=fingerprint,
+      original_content_hash=baseline.content_hash,
+      target=target,
+      checks=checks,
+      reasons=fix_validation.reasons,
+    )
+
+  return ProposedFix(
+    status=ProposedFixStatus.VALIDATED,
+    specification_kind=baseline.specification_kind,
+    finding_fingerprint=fingerprint,
+    original_content_hash=baseline.content_hash,
+    provider=target.provider,
+    model=target.judge_model,
+    revised_specification=revised,
+    unified_diff=unified_specification_diff(
+      specification_text, revised, filename=specification_name
+    ),
+    explanation=candidate.explanation,
+    validation_checks=tuple(checks),
   )

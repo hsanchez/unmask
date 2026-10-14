@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -12,11 +13,65 @@ if TYPE_CHECKING:
 
   from .config import TargetConfig
 
+_PROVIDER_TIMEOUT_SECONDS = 60
+
+
+@dataclass(frozen=True)
+class TokenUsage:
+  """Provider-reported token counts for one model call."""
+
+  input_tokens: int
+  output_tokens: int
+  total_tokens: int
+
+  def to_dict(self) -> dict[str, int]:
+    return {
+      "input_tokens": self.input_tokens,
+      "output_tokens": self.output_tokens,
+      "total_tokens": self.total_tokens,
+    }
+
+
+@dataclass(frozen=True)
+class JudgeResponse:
+  """Text and optional usage returned by one model call."""
+
+  text: str
+  usage: TokenUsage | None = None
+
 
 class JudgeBackend(Protocol):
   """A model that can be prompted to return a single JSON response."""
 
-  def judge(self, prompt: str, *, max_tokens: int = 8192) -> str: ...
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse: ...
+
+
+def _token_usage(
+  raw: object,
+  *,
+  input_name: str,
+  output_name: str,
+  total_name: str | None = None,
+) -> TokenUsage | None:
+  input_tokens: object = getattr(raw, input_name, None)
+  output_tokens: object = getattr(raw, output_name, None)
+  if (
+    not isinstance(input_tokens, int)
+    or isinstance(input_tokens, bool)
+    or not isinstance(output_tokens, int)
+    or isinstance(output_tokens, bool)
+  ):
+    return None
+  total_tokens: object = getattr(raw, total_name, None) if total_name else None
+  return TokenUsage(
+    input_tokens=input_tokens,
+    output_tokens=output_tokens,
+    total_tokens=(
+      total_tokens
+      if isinstance(total_tokens, int) and not isinstance(total_tokens, bool)
+      else input_tokens + output_tokens
+    ),
+  )
 
 
 class _Response(Protocol):
@@ -40,6 +95,7 @@ class _ClientFactory(Protocol):
     vertexai: bool | None = None,
     project: str | None = None,
     location: str | None = None,
+    http_options: object | None = None,
   ) -> _Client: ...
 
 
@@ -99,7 +155,9 @@ class _OpenAIClient(Protocol):
 
 
 class _OpenAIClientFactory(Protocol):
-  def __call__(self, *, api_key: str) -> _OpenAIClient: ...
+  def __call__(
+    self, *, api_key: str, timeout: float, max_retries: int
+  ) -> _OpenAIClient: ...
 
 
 class _OpenAIModule(Protocol):
@@ -131,7 +189,9 @@ class _AnthropicClient(Protocol):
 
 
 class _AnthropicClientFactory(Protocol):
-  def __call__(self, *, api_key: str) -> _AnthropicClient: ...
+  def __call__(
+    self, *, api_key: str, timeout: float, max_retries: int
+  ) -> _AnthropicClient: ...
 
 
 class _AnthropicModule(Protocol):
@@ -185,15 +245,24 @@ class GeminiBackend:
     )
 
     self._types: _TypesModule = types
+    http_options: dict[str, object] = {
+      "timeout": _PROVIDER_TIMEOUT_SECONDS * 1_000,
+      "retry_options": {"attempts": 1},
+    }
     self._client: _Client = (
-      genai.Client(vertexai=True, project=config.project, location=config.location)
+      genai.Client(
+        vertexai=True,
+        project=config.project,
+        location=config.location,
+        http_options=http_options,
+      )
       if config.project
-      else genai.Client()
+      else genai.Client(http_options=http_options)
     )
     self._model: str = config.judge_model
     self._thinking_budget: int | None = config.thinking_budget
 
-  def judge(self, prompt: str, *, max_tokens: int = 8192) -> str:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
     """
     Raises:
       RuntimeError: if Gemini returns an empty response.
@@ -214,11 +283,17 @@ class GeminiBackend:
         thinking_config=thinking,
       ),
     )
+    usage: TokenUsage | None = _token_usage(
+      getattr(response, "usage_metadata", None),
+      input_name="prompt_token_count",
+      output_name="candidates_token_count",
+      total_name="total_token_count",
+    )
 
     text: object = response.text
     if not isinstance(text, str) or not text:
       raise RuntimeError("Gemini returned an empty semantic extraction")
-    return text
+    return JudgeResponse(text=text, usage=usage)
 
 
 class OpenAIBackend:
@@ -235,10 +310,12 @@ class OpenAIBackend:
       _load_sdk_module("openai", display_name="OpenAI", extra="openai"),
     )
     api_key: str = _require_api_key("OPENAI_API_KEY", provider="openai")
-    self._client: _OpenAIClient = openai_module.OpenAI(api_key=api_key)
+    self._client: _OpenAIClient = openai_module.OpenAI(
+      api_key=api_key, timeout=_PROVIDER_TIMEOUT_SECONDS, max_retries=0
+    )
     self._model: str = config.judge_model
 
-  def judge(self, prompt: str, *, max_tokens: int = 8192) -> str:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
     """
     Raises:
       RuntimeError: if OpenAI returns an empty response.
@@ -249,10 +326,16 @@ class OpenAIBackend:
       max_tokens=max_tokens,
       temperature=0,
     )
+    usage: TokenUsage | None = _token_usage(
+      getattr(response, "usage", None),
+      input_name="prompt_tokens",
+      output_name="completion_tokens",
+      total_name="total_tokens",
+    )
     text: str | None = response.choices[0].message.content if response.choices else None
     if not text:
       raise RuntimeError("OpenAI returned an empty semantic extraction")
-    return text
+    return JudgeResponse(text=text, usage=usage)
 
 
 class AnthropicBackend:
@@ -269,10 +352,12 @@ class AnthropicBackend:
       _load_sdk_module("anthropic", display_name="Anthropic", extra="anthropic"),
     )
     api_key: str = _require_api_key("ANTHROPIC_API_KEY", provider="anthropic")
-    self._client: _AnthropicClient = anthropic_module.Anthropic(api_key=api_key)
+    self._client: _AnthropicClient = anthropic_module.Anthropic(
+      api_key=api_key, timeout=_PROVIDER_TIMEOUT_SECONDS, max_retries=0
+    )
     self._model: str = config.judge_model
 
-  def judge(self, prompt: str, *, max_tokens: int = 8192) -> str:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
     """
     Raises:
       RuntimeError: if Anthropic returns an empty response.
@@ -283,12 +368,17 @@ class AnthropicBackend:
       messages=[{"role": "user", "content": prompt}],
       temperature=0,
     )
+    usage: TokenUsage | None = _token_usage(
+      getattr(response, "usage", None),
+      input_name="input_tokens",
+      output_name="output_tokens",
+    )
     text: str = "".join(
       block.text for block in response.content if block.type == "text"
     )
     if not text:
       raise RuntimeError("Anthropic returned an empty semantic extraction")
-    return text
+    return JudgeResponse(text=text, usage=usage)
 
 
 _PROVIDER_REGISTRY: dict[str, Callable[[TargetConfig], JudgeBackend]] = {

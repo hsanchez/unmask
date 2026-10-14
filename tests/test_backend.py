@@ -20,6 +20,27 @@ def _target(*, provider: str = "gemini", project: str | None = None) -> TargetCo
   )
 
 
+class _Usage:
+  def __init__(self, input_tokens: int, output_tokens: int) -> None:
+    self.input_tokens = input_tokens
+    self.output_tokens = output_tokens
+
+
+def test_token_usage_normalizes_provider_counts() -> None:
+  usage = backend_module._token_usage(
+    _Usage(input_tokens=12, output_tokens=7),
+    input_name="input_tokens",
+    output_name="output_tokens",
+  )
+
+  assert usage is not None
+  assert usage.to_dict() == {
+    "input_tokens": 12,
+    "output_tokens": 7,
+    "total_tokens": 19,
+  }
+
+
 class TestGeminiBackendInit:
   @pytest.mark.parametrize("project", [None, "test-project"])
   def test_falls_back_when_genai_is_not_installed(self, project: str | None) -> None:
@@ -134,12 +155,13 @@ class TestGeminiBackendJudge:
 
     result = backend.judge("prompt text", max_tokens=123)
 
-    assert result == "hello world"
+    assert result.text == "hello world"
     call = genai_module.client_calls[0]
     assert call == {
       "vertexai": True,
       "project": "test-project",
       "location": "global",
+      "http_options": {"timeout": 60_000, "retry_options": {"attempts": 1}},
     }
 
   def test_uses_developer_api_mode_when_project_is_unset(
@@ -148,7 +170,9 @@ class TestGeminiBackendJudge:
     genai_module = _patch_gemini_sdk(monkeypatch, response_text="ok")
     _ = GeminiBackend(_target(project=None))
 
-    assert genai_module.client_calls == [{}]
+    assert genai_module.client_calls == [
+      {"http_options": {"timeout": 60_000, "retry_options": {"attempts": 1}}}
+    ]
 
   @pytest.mark.parametrize("response_text", ["", None])
   def test_raises_on_empty_response(
@@ -232,8 +256,10 @@ class TestOpenAIBackendJudge:
 
     result = backend.judge("prompt text", max_tokens=123)
 
-    assert result == "hello world"
-    assert openai_module.client_calls == [{"api_key": "test-key"}]
+    assert result.text == "hello world"
+    assert openai_module.client_calls == [
+      {"api_key": "test-key", "timeout": 60, "max_retries": 0}
+    ]
 
   def test_request_carries_prompt_model_and_max_tokens(
     self, monkeypatch: pytest.MonkeyPatch
@@ -338,8 +364,10 @@ class TestAnthropicBackendJudge:
 
     result = backend.judge("prompt text", max_tokens=123)
 
-    assert result == "hello world"
-    assert anthropic_module.client_calls == [{"api_key": "test-key"}]
+    assert result.text == "hello world"
+    assert anthropic_module.client_calls == [
+      {"api_key": "test-key", "timeout": 60, "max_retries": 0}
+    ]
 
   def test_concatenates_only_text_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression test: non-text blocks (e.g. extended-thinking output) must
@@ -357,7 +385,7 @@ class TestAnthropicBackendJudge:
 
     result = backend.judge("prompt text")
 
-    assert result == "hello world"
+    assert result.text == "hello world"
 
   def test_raises_when_content_is_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
     _ = _patch_anthropic_sdk(monkeypatch, content=[])

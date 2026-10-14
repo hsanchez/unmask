@@ -5,6 +5,7 @@ from typing import cast
 import pytest
 
 import unmask.cli as cli_module
+from unmask.backend import JudgeResponse
 from unmask.cli import main
 from unmask.config import TargetConfig, load_guardrail
 from unmask.diagnosis import RegexManifest
@@ -32,107 +33,109 @@ class CatalogBackend:
   def __init__(self, config: TargetConfig) -> None:
     del config
 
-  def judge(self, prompt: str, *, max_tokens: int = 8192) -> str:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
     del prompt, max_tokens
-    return json.dumps(
-      {
-        "predicates": {
-          "neutral_reporting": "The response reports a third-party action.",
-          "financial_education": "The response provides general education.",
-          "personalized_recommendation": "The response recommends a transaction.",
-          "mentions_investment_term": "The response contains an investment term.",
-          "actionable_trading": "The response gives actionable trading steps.",
-          "minor": "The user is a minor.",
-          "first_time_investor": "The user is investing for the first time.",
-        },
-        "safe_condition": [
-          [{"predicate": "neutral_reporting", "value": True}],
-          [{"predicate": "financial_education", "value": True}],
-        ],
-        "rules": [
-          {
-            "rule_id": "rule:1",
-            "decision": "block",
-            "condition": [
-              [
-                {"predicate": "neutral_reporting", "value": True},
-                {"predicate": "mentions_investment_term", "value": True},
-              ]
-            ],
+    return JudgeResponse(
+      json.dumps(
+        {
+          "predicates": {
+            "neutral_reporting": "The response reports a third-party action.",
+            "financial_education": "The response provides general education.",
+            "personalized_recommendation": "The response recommends a transaction.",
+            "mentions_investment_term": "The response contains an investment term.",
+            "actionable_trading": "The response gives actionable trading steps.",
+            "minor": "The user is a minor.",
+            "first_time_investor": "The user is investing for the first time.",
           },
-          {
-            "rule_id": "rule:2",
-            "decision": "allow",
-            "condition": [[{"predicate": "financial_education", "value": True}]],
-          },
-          {
-            "rule_id": "rule:3",
-            "decision": "block",
-            "condition": [
-              [
-                {"predicate": "financial_education", "value": True},
-                {"predicate": "actionable_trading", "value": True},
-              ]
-            ],
-          },
-          {
-            "rule_id": "rule:4",
-            "decision": "block",
-            "condition": [
-              [
-                {"predicate": "personalized_recommendation", "value": True},
-                {"predicate": "minor", "value": True},
-              ],
-              [
-                {"predicate": "personalized_recommendation", "value": True},
-                {"predicate": "first_time_investor", "value": True},
-              ],
-            ],
-          },
-        ],
-        "exclusions": [
-          [
-            "neutral_reporting",
-            "financial_education",
-            "personalized_recommendation",
-          ]
-        ],
-        "ambiguities": [
-          {
-            "rule_id": "rule:4",
-            "category": "coordination_scope",
-            "excerpt": "minors and first-time investors",
-            "rationale": "And may join two audiences or require both traits.",
-            "interpretation_a": {
-              "label": "either protected audience",
+          "safe_condition": [
+            [{"predicate": "neutral_reporting", "value": True}],
+            [{"predicate": "financial_education", "value": True}],
+          ],
+          "rules": [
+            {
+              "rule_id": "rule:1",
               "decision": "block",
               "condition": [
                 [
-                  {"predicate": "personalized_recommendation", "value": True},
-                  {"predicate": "minor", "value": True},
-                ],
-                [
-                  {"predicate": "personalized_recommendation", "value": True},
-                  {"predicate": "first_time_investor", "value": True},
-                ],
-              ],
-              "rationale": "A recommendation to either audience is blocked.",
-            },
-            "interpretation_b": {
-              "label": "both protected audiences",
-              "decision": "block",
-              "condition": [
-                [
-                  {"predicate": "personalized_recommendation", "value": True},
-                  {"predicate": "minor", "value": True},
-                  {"predicate": "first_time_investor", "value": True},
+                  {"predicate": "neutral_reporting", "value": True},
+                  {"predicate": "mentions_investment_term", "value": True},
                 ]
               ],
-              "rationale": "Only a user with both traits is covered.",
             },
-          }
-        ],
-      }
+            {
+              "rule_id": "rule:2",
+              "decision": "allow",
+              "condition": [[{"predicate": "financial_education", "value": True}]],
+            },
+            {
+              "rule_id": "rule:3",
+              "decision": "block",
+              "condition": [
+                [
+                  {"predicate": "financial_education", "value": True},
+                  {"predicate": "actionable_trading", "value": True},
+                ]
+              ],
+            },
+            {
+              "rule_id": "rule:4",
+              "decision": "block",
+              "condition": [
+                [
+                  {"predicate": "personalized_recommendation", "value": True},
+                  {"predicate": "minor", "value": True},
+                ],
+                [
+                  {"predicate": "personalized_recommendation", "value": True},
+                  {"predicate": "first_time_investor", "value": True},
+                ],
+              ],
+            },
+          ],
+          "exclusions": [
+            [
+              "neutral_reporting",
+              "financial_education",
+              "personalized_recommendation",
+            ]
+          ],
+          "ambiguities": [
+            {
+              "rule_id": "rule:4",
+              "category": "coordination_scope",
+              "excerpt": "minors and first-time investors",
+              "rationale": "And may join two audiences or require both traits.",
+              "interpretation_a": {
+                "label": "either protected audience",
+                "decision": "block",
+                "condition": [
+                  [
+                    {"predicate": "personalized_recommendation", "value": True},
+                    {"predicate": "minor", "value": True},
+                  ],
+                  [
+                    {"predicate": "personalized_recommendation", "value": True},
+                    {"predicate": "first_time_investor", "value": True},
+                  ],
+                ],
+                "rationale": "A recommendation to either audience is blocked.",
+              },
+              "interpretation_b": {
+                "label": "both protected audiences",
+                "decision": "block",
+                "condition": [
+                  [
+                    {"predicate": "personalized_recommendation", "value": True},
+                    {"predicate": "minor", "value": True},
+                    {"predicate": "first_time_investor", "value": True},
+                  ]
+                ],
+                "rationale": "Only a user with both traits is covered.",
+              },
+            }
+          ],
+        }
+      )
     )
 
 
