@@ -1,0 +1,240 @@
+{
+  "schema_version": 1,
+  "id": "A_correct_procedurally_adherent",
+  "context": "Alice joined ACME in 2024. Alice is ACME's CTO.",
+  "response": "Alice joined ACME in 2024 and is its CTO.",
+  "rationale": "There are two claims: joining ACME in 2024 and holding the CTO role. The supplied context explicitly supports both; I use only that context. PASS.",
+  "verdict": "PASS",
+  "gold_verdict": "PASS",
+  "protocol": {
+    "text": "Identify all factual claims; address each against only the supplied context; do not use external knowledge. PASS iff every claim is supported. Claim inventory completeness must be assessed.",
+    "atoms": [
+      {
+        "id": "j1",
+        "role": "judge",
+        "description": "Judge states context supports joining ACME in 2024"
+      },
+      {
+        "id": "j2",
+        "role": "judge",
+        "description": "Judge states context supports CTO role"
+      },
+      {
+        "id": "c1",
+        "role": "context",
+        "description": "Independent assessment: context supports joining ACME in 2024"
+      },
+      {
+        "id": "c2",
+        "role": "context",
+        "description": "Independent assessment: context supports CTO role"
+      },
+      {
+        "id": "examined1",
+        "role": "procedure",
+        "description": "Rationale observably addresses first claim"
+      },
+      {
+        "id": "examined2",
+        "role": "procedure",
+        "description": "Rationale observably addresses second claim"
+      },
+      {
+        "id": "external",
+        "role": "procedure",
+        "description": "Rationale explicitly relies on external knowledge"
+      },
+      {
+        "id": "inventory_complete",
+        "role": "procedure",
+        "description": "Rationale enumerates both response claims"
+      }
+    ],
+    "decision": {
+      "op": "and",
+      "args": [
+        {
+          "atom": "j1"
+        },
+        {
+          "atom": "j2"
+        }
+      ]
+    },
+    "constraints": [],
+    "requirements": [
+      {
+        "id": "examine_all",
+        "description": "Address every listed claim",
+        "expr": {
+          "op": "and",
+          "args": [
+            {
+              "atom": "examined1"
+            },
+            {
+              "atom": "examined2"
+            }
+          ]
+        },
+        "addressed": {
+          "op": "and",
+          "args": [
+            {
+              "atom": "examined1"
+            },
+            {
+              "atom": "examined2"
+            }
+          ]
+        }
+      },
+      {
+        "id": "context_only",
+        "description": "Use only supplied context",
+        "expr": {
+          "op": "not",
+          "args": [
+            {
+              "atom": "external"
+            }
+          ]
+        },
+        "addressed": {
+          "const": true
+        }
+      },
+      {
+        "id": "claim_inventory",
+        "description": "Identify every response claim",
+        "expr": {
+          "atom": "inventory_complete"
+        },
+        "addressed": {
+          "atom": "inventory_complete"
+        }
+      }
+    ]
+  },
+  "findings": [
+    {
+      "atom": "j1",
+      "value": "TRUE",
+      "evidence": [
+        {
+          "source": "rationale",
+          "start": 0,
+          "end": 146,
+          "quote": "There are two claims: joining ACME in 2024 and holding the CTO role. The supplied context explicitly supports both; I use only that context. PASS."
+        }
+      ],
+      "explanation": "Judge states context supports joining ACME in 2024. Hand-annotated semantic assessment; span validity does not prove interpretation."
+    },
+    {
+      "atom": "j2",
+      "value": "TRUE",
+      "evidence": [
+        {
+          "source": "rationale",
+          "start": 0,
+          "end": 146,
+          "quote": "There are two claims: joining ACME in 2024 and holding the CTO role. The supplied context explicitly supports both; I use only that context. PASS."
+        }
+      ],
+      "explanation": "Judge states context supports CTO role. Hand-annotated semantic assessment; span validity does not prove interpretation."
+    },
+    {
+      "atom": "c1",
+      "value": "TRUE",
+      "evidence": [
+        {
+          "source": "context",
+          "start": 0,
+          "end": 47,
+          "quote": "Alice joined ACME in 2024. Alice is ACME's CTO."
+        }
+      ],
+      "explanation": "Independent assessment: context supports joining ACME in 2024. Hand-annotated semantic assessment; span validity does not prove interpretation."
+    },
+    {
+      "atom": "c2",
+      "value": "TRUE",
+      "evidence": [
+        {
+          "source": "context",
+          "start": 0,
+          "end": 47,
+          "quote": "Alice joined ACME in 2024. Alice is ACME's CTO."
+        }
+      ],
+      "explanation": "Independent assessment: context supports CTO role. Hand-annotated semantic assessment; span validity does not prove interpretation."
+    },
+    {
+      "atom": "examined1",
+      "value": "TRUE",
+      "evidence": [
+        {
+          "source": "rationale",
+          "start": 0,
+          "end": 146,
+          "quote": "There are two claims: joining ACME in 2024 and holding the CTO role. The supplied context explicitly supports both; I use only that context. PASS."
+        }
+      ],
+      "explanation": "Rationale observably addresses first claim. Hand-annotated semantic assessment; span validity does not prove interpretation."
+    },
+    {
+      "atom": "examined2",
+      "value": "TRUE",
+      "evidence": [
+        {
+          "source": "rationale",
+          "start": 0,
+          "end": 146,
+          "quote": "There are two claims: joining ACME in 2024 and holding the CTO role. The supplied context explicitly supports both; I use only that context. PASS."
+        }
+      ],
+      "explanation": "Rationale observably addresses second claim. Hand-annotated semantic assessment; span validity does not prove interpretation."
+    },
+    {
+      "atom": "external",
+      "value": "FALSE",
+      "evidence": [
+        {
+          "source": "rationale",
+          "start": 0,
+          "end": 146,
+          "quote": "There are two claims: joining ACME in 2024 and holding the CTO role. The supplied context explicitly supports both; I use only that context. PASS."
+        }
+      ],
+      "explanation": "Rationale explicitly relies on external knowledge. Hand-annotated semantic assessment; span validity does not prove interpretation."
+    },
+    {
+      "atom": "inventory_complete",
+      "value": "TRUE",
+      "evidence": [
+        {
+          "source": "rationale",
+          "start": 0,
+          "end": 146,
+          "quote": "There are two claims: joining ACME in 2024 and holding the CTO role. The supplied context explicitly supports both; I use only that context. PASS."
+        }
+      ],
+      "explanation": "Rationale enumerates both response claims. Hand-annotated semantic assessment; span validity does not prove interpretation."
+    }
+  ],
+  "grounding_pairs": [
+    [
+      "j1",
+      "c1"
+    ],
+    [
+      "j2",
+      "c2"
+    ]
+  ],
+  "extraction": {
+    "provider": "hand-annotated-replay",
+    "translation_status": "VALID",
+    "notes": "No live LLM called. VALID asserts reviewer-supplied translation, not proved semantic fidelity."
+  }
+}

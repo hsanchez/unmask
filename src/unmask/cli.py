@@ -23,6 +23,7 @@ from .diagnosis import (
   RegexManifest,
 )
 from .importer import ImportedViolation, load_violations
+from .judge_audit.service import audit_judge_case
 from .service import (
   DEFAULT_MODELS,
   ScanResult,
@@ -78,7 +79,15 @@ class ServeArguments:
   open_browser: bool
 
 
-type CommandArguments = ScanArguments | DiagnoseArguments | ServeArguments
+@dataclass(frozen=True)
+class AuditArguments:
+  case: Path
+  output: Path | None
+
+
+type CommandArguments = (
+  ScanArguments | DiagnoseArguments | ServeArguments | AuditArguments
+)
 
 
 def _write_json(path: Path, data: object) -> None:
@@ -278,6 +287,14 @@ def _build_parser() -> argparse.ArgumentParser:
   )
   subparsers = parser.add_subparsers(dest="command", required=True)
 
+  audit_parser = subparsers.add_parser(
+    "audit-judge", help="audit a structured judge replay locally"
+  )
+  audit_parser.add_argument("case", type=Path, help="annotated audit case JSON")
+  audit_parser.add_argument(
+    "--output", type=Path, help="report JSON file (default: stdout)"
+  )
+
   scan_parser = subparsers.add_parser(
     "scan",
     help="scan a natural-language or regex guardrail specification for defects",
@@ -396,6 +413,10 @@ def _load_environment(env_file: Path | None) -> None:
 def _parse_arguments(argv: list[str] | None) -> CommandArguments:
   namespace: argparse.Namespace = _build_parser().parse_args(argv)
   values: dict[str, object] = cast("dict[str, object]", vars(namespace))
+  if values["command"] == "audit-judge":
+    return AuditArguments(
+      case=cast("Path", values["case"]), output=cast("Path | None", values["output"])
+    )
   if values["command"] == "scan":
     return ScanArguments(
       specification=cast("Path", values["specification"]),
@@ -426,10 +447,19 @@ def main(argv: list[str] | None = None) -> int:
   Raises:
     SystemExit: if argument parsing fails or `--help` is requested, via argparse.
   """
-  _load_environment(_extract_env_file(argv))
+  arguments = sys.argv[1:] if argv is None else argv
+  if not arguments or arguments[0] != "audit-judge":
+    _load_environment(_extract_env_file(argv))
   args: CommandArguments = _parse_arguments(argv)
 
   try:
+    if isinstance(args, AuditArguments):
+      report = audit_judge_case(args.case.read_text(encoding="utf-8"))
+      if args.output is None:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+      else:
+        _write_json(args.output, report)
+      return 0
     if isinstance(args, ScanArguments):
       return _run_scan(
         args.specification,

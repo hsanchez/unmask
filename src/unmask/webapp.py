@@ -19,6 +19,7 @@ from werkzeug.exceptions import BadRequest, RequestEntityTooLarge, UnsupportedMe
 from werkzeug.serving import make_server
 
 from .config import TargetConfig
+from .judge_audit.service import AUDITOR_VERSION, audit_judge_case, validate_audit_case
 from .repair import PROPOSED_FIX_SCHEMA_VERSION, RepairGenerationError
 from .service import (
   DEFAULT_MODELS,
@@ -57,6 +58,13 @@ class _LocalServer(Protocol):
 
 def _error(message: str, *, code: str, status: int) -> tuple[Response, int]:
   return jsonify({"error": {"code": code, "message": message}}), status
+
+
+def _cross_origin_request() -> bool:
+  origin: str | None = request.headers.get("Origin")
+  return (
+    origin is not None and origin != request.host_url.rstrip("/")
+  ) or request.headers.get("Sec-Fetch-Site") == "cross-site"
 
 
 def _json_object() -> dict[str, object]:
@@ -169,6 +177,8 @@ def create_app() -> Flask:
   application.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
   application.config["TEMPLATES_AUTO_RELOAD"] = True
   application.config["TRUSTED_HOSTS"] = ["127.0.0.1", "localhost", "[::1]"]
+  audit_slots = BoundedSemaphore(value=1)
+  application.extensions["unmask_audit_slots"] = audit_slots
   proposed_fix_slots = BoundedSemaphore(value=1)
   application.extensions["unmask_proposed_fix_slots"] = proposed_fix_slots
 
@@ -213,7 +223,12 @@ def create_app() -> Flask:
         "schemaVersion": 1,
         "version": APPLICATION_VERSION,
         "specificationKinds": ["natural_language", "regex"],
-        "workflows": ["scan", "diagnose"],
+        "workflows": ["scan", "diagnose", "audit_judge"],
+        "judgeAudits": {
+          "schemaVersion": 1,
+          "auditorVersion": AUDITOR_VERSION,
+          "mode": "replay",
+        },
         "diagnosisSpecificationKinds": ["regex"],
         "providers": providers,
         "maxRequestBytes": MAX_REQUEST_BYTES,
@@ -312,11 +327,73 @@ def create_app() -> Flask:
 
   application.add_url_rule("/api/v1/diagnoses", methods=("POST",), view_func=diagnoses)
 
+  def audit_example() -> Response:
+    return jsonify(
+      {"name": "judge-audit.json", "text": _packaged_text("judge-audit.json")}
+    )
+
+  application.add_url_rule(
+    "/api/v1/judge-audits/example", methods=("GET",), view_func=audit_example
+  )
+
+  def validate_audit() -> tuple[Response, int] | Response:
+    if _cross_origin_request():
+      return _error(
+        "cross-origin requests are not allowed", code="invalid_origin", status=403
+      )
+    try:
+      data = _json_object()
+      _only_fields(data, frozenset({"case"}))
+      _, text = _document(data.get("case"), field="case")
+      return jsonify(validate_audit_case(text))
+    except (TypeError, ValueError) as exc:
+      return _error(str(exc), code="invalid_audit_case", status=400)
+
+  application.add_url_rule(
+    "/api/v1/judge-audits/validate", methods=("POST",), view_func=validate_audit
+  )
+
+  def judge_audits() -> tuple[Response, int] | Response:
+    if _cross_origin_request():
+      return _error(
+        "cross-origin requests are not allowed", code="invalid_origin", status=403
+      )
+    if not audit_slots.acquire(blocking=False):
+      return _error(
+        "An audit is already running. Try again when it finishes.",
+        code="audit_busy",
+        status=409,
+      )
+    try:
+      data = _json_object()
+      _only_fields(data, frozenset({"case", "contentHash"}))
+      _, text = _document(data.get("case"), field="case")
+      validated = validate_audit_case(text)
+      if data.get("contentHash") != validated["contentHash"]:
+        return _error(
+          "The audit case changed. Validate it again before running.",
+          code="stale_audit_case",
+          status=409,
+        )
+      return jsonify(audit_judge_case(text))
+    except (TypeError, ValueError) as exc:
+      return _error(str(exc), code="invalid_audit_case", status=400)
+    except RuntimeError:
+      logger.exception("judge audit failed")
+      return _error(
+        "The local solver could not complete this audit.",
+        code="audit_failed",
+        status=422,
+      )
+    finally:
+      audit_slots.release()
+
+  application.add_url_rule(
+    "/api/v1/judge-audits", methods=("POST",), view_func=judge_audits
+  )
+
   def proposed_fixes() -> tuple[Response, int] | Response:
-    origin: str | None = request.headers.get("Origin")
-    if (
-      origin is not None and origin != request.host_url.rstrip("/")
-    ) or request.headers.get("Sec-Fetch-Site") == "cross-site":
+    if _cross_origin_request():
       return _error(
         "cross-origin repair requests are not allowed",
         code="invalid_origin",

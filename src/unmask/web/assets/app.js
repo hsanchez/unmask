@@ -14,6 +14,7 @@ const state = {
   editingStudyId: null,
   hoveredFindingIds: [],
   pinnedFindingIds: [],
+  pinnedSourceRange: null,
   scanController: null,
   proposalControllers: new Map(),
   proposalResults: new Map(),
@@ -133,6 +134,8 @@ async function loadImports() {
     }));
   state.imports = storedRecords
       .filter((study) => study.recordType !== "sample_override" && !study.bundled)
+      .map(UnmaskAudit.normalize)
+      .filter(Boolean)
       .map((study) => ({
         ...study,
         settings: {
@@ -243,6 +246,7 @@ function studyRow(study) {
     title.className = "study-title";
     title.textContent = study.title;
     button.append(dot, title);
+    if (isAuditStudy(study)) button.append(auditElement("span", "audit", "study-kind-badge"));
     button.addEventListener("click", () => selectStudy(study));
     row.append(button);
   }
@@ -287,6 +291,7 @@ function normalizeSample(sample) {
 }
 
 async function ensureValidated(study) {
+  if (isAuditStudy(study)) return validateAuditStudy(study);
   if (study.document) return study;
   const validation = await api("/api/v1/validate", {
     method: "POST",
@@ -298,14 +303,20 @@ async function ensureValidated(study) {
 }
 
 async function selectStudy(study) {
+  const selection = Symbol("selection");
+  state.selection = selection;
+  state.auditReplacement = null;
   try {
     state.scanController?.abort();
     state.scanController = null;
     elements.analyzeButton.textContent = runActionLabel(study);
     setNotice("");
-    state.activeStudy = await ensureValidated(study);
+    const validated = await ensureValidated(study);
+    if (state.selection !== selection) return;
+    state.activeStudy = validated;
     state.hoveredFindingIds = [];
     state.pinnedFindingIds = [];
+    state.pinnedSourceRange = null;
     renderStudyLists();
     renderActiveStudy();
     closeDrawers(false);
@@ -456,11 +467,14 @@ function toggleModelMenu() {
 }
 
 function currentWorkflow(study) {
-  return study.settings.workflow === "diagnose" ? "diagnose" : "scan";
+  if (isAuditStudy(study)) return "audit_judge";
+  const workflow = study.settings.workflow || "scan";
+  if (!["scan", "diagnose"].includes(workflow)) throw new Error("Unsupported study workflow");
+  return workflow;
 }
 
 function runActionLabel(study) {
-  return currentWorkflow(study) === "diagnose" ? "Diagnose" : "Scan";
+  return {scan: "Scan", diagnose: "Diagnose", audit_judge: "Run audit"}[currentWorkflow(study)];
 }
 
 function matchingCachedRun(study) {
@@ -568,13 +582,22 @@ function renderControls(study) {
 }
 
 function renderEmptyWorkspace() {
+  configureAuditWorkspace(false);
+  state.selection = null;
+  elements.scanMode.classList.toggle("active", true);
+  elements.scanMode.setAttribute("aria-pressed", "true");
+  elements.diagnoseMode.classList.remove("active");
+  elements.diagnoseMode.setAttribute("aria-pressed", "false");
+  elements.analysisEmpty.textContent = "Select a specification or choose Audit judge.";
   elements.studyKind.textContent = "No specification loaded";
   elements.studyTitle.textContent = "Select or import a specification";
   elements.sourceName.textContent = "";
   elements.activeFileControl.hidden = true;
   elements.copyStatus.textContent = "";
   elements.analysisControls.hidden = true;
-  elements.workflowToggle.hidden = true;
+  elements.workflowToggle.hidden = false;
+  elements.scanMode.disabled = false;
+  elements.diagnoseMode.disabled = true;
   elements.analysisEmpty.hidden = false;
   elements.providerDisclosure.hidden = true;
   elements.sourceView.replaceChildren();
@@ -591,6 +614,8 @@ function renderActiveStudy() {
     renderEmptyWorkspace();
     return;
   }
+  if (isAuditStudy(study)) { renderAuditWorkspace(study); return; }
+  configureAuditWorkspace(false);
   elements.studyKind.textContent = study.specificationKind.replace("_", " ");
   elements.studyTitle.textContent = study.title;
   elements.sourceName.textContent = study.specificationName;
@@ -608,9 +633,11 @@ function codePointToCodeUnit(text, index) {
 
 function renderSource(documentData, findings) {
   const source = documentData.rawText;
+  elements.sourceView.dataset.documentId = documentData.id;
   const references = [];
   for (const finding of findings) {
     for (const reference of finding.sourceReferences || []) {
+      if (reference.documentId !== documentData.id) continue;
       references.push({
         start: codePointToCodeUnit(source, reference.start),
         end: codePointToCodeUnit(source, reference.end),
@@ -635,6 +662,8 @@ function renderSource(documentData, findings) {
       span.className = "source-reference";
       span.tabIndex = 0;
       span.dataset.findingIds = JSON.stringify(findingIds);
+      span.dataset.sourceStart = String(start);
+      span.dataset.sourceEnd = String(end);
       span.setAttribute("aria-label", `${findingIds.length} related finding${findingIds.length === 1 ? "" : "s"}`);
       bindFindingPreview(span, findingIds);
       span.addEventListener("click", () => pinFindings(findingIds));
@@ -963,16 +992,24 @@ function clearPreview() {
   applyHighlights();
 }
 
-function pinFindings(ids) {
+function pinFindings(ids, sourceRange = null) {
   state.pinnedFindingIds = ids;
+  state.pinnedSourceRange = sourceRange;
   applyHighlights();
 }
 
 function applyHighlights() {
-  const active = new Set(state.hoveredFindingIds.length ? state.hoveredFindingIds : state.pinnedFindingIds);
+  const showingPreview = state.hoveredFindingIds.length > 0;
+  const active = new Set(showingPreview ? state.hoveredFindingIds : state.pinnedFindingIds);
+  const range = showingPreview ? null : state.pinnedSourceRange;
   document.querySelectorAll(".source-reference").forEach((node) => {
     const ids = JSON.parse(node.dataset.findingIds);
-    node.classList.toggle("active", ids.some((id) => active.has(id)));
+    const inRange = !range || (
+      range.documentId === elements.sourceView.dataset.documentId
+      && Number(node.dataset.sourceStart) < range.end
+      && Number(node.dataset.sourceEnd) > range.start
+    );
+    node.classList.toggle("active", inRange && ids.some((id) => active.has(id)));
   });
   document.querySelectorAll(".finding-card").forEach((node) => {
     node.classList.toggle("active", active.has(node.dataset.findingId));
@@ -1097,6 +1134,14 @@ async function attachIncidents(file) {
 }
 
 function setWorkflow(workflow) {
+  if (isAuditStudy(state.activeStudy) || !state.activeStudy) {
+    state.scanController?.abort();
+    state.activeStudy = null;
+    state.auditReplacement = null;
+    renderEmptyWorkspace();
+    renderStudyLists();
+    return;
+  }
   const study = state.activeStudy;
   if (!study) return;
   if (workflow === "diagnose" && study.specificationKind !== "regex") {
@@ -1115,6 +1160,7 @@ function setWorkflow(workflow) {
 async function analyzeActiveStudy() {
   const study = state.activeStudy;
   if (!study) return;
+  if (isAuditStudy(study)) { await runAuditStudy(study); return; }
   if (state.scanController) {
     state.scanController.abort();
     return;
@@ -1398,6 +1444,7 @@ function bindFileInput(button, input, handleFile) {
 }
 
 function bindEvents() {
+  bindAuditEvents();
   bindFileInput(elements.importButton, elements.fileInput, importSpecification);
   bindFileInput(elements.taxonomyButton, elements.taxonomyInput, attachTaxonomy);
   bindFileInput(elements.incidentsButton, elements.incidentsInput, attachIncidents);

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Unmask · Specification studio</title>
-    <link rel="stylesheet" href="/assets/style.css?v=20">
+    <link rel="stylesheet" href="/assets/style.css?v=21">
   </head>
   <body>
     <header class="masthead">
@@ -40,7 +40,7 @@
         type="button"
         aria-controls="specifications-panel"
         aria-expanded="false"
-      >Specifications</button>
+      >Studies</button>
       <button
         id="analysis-toggle"
         class="toolbar-button"
@@ -53,7 +53,7 @@
     <main class="studio-shell">
       <aside id="specifications-panel" class="specifications-panel" aria-labelledby="studies-heading">
         <div class="rail-heading">
-          <h1 id="studies-heading">Specifications</h1>
+          <h1 id="studies-heading">Studies</h1>
           <div class="rail-heading-actions">
             <button id="import-button" class="icon-button" type="button" aria-label="Import specification">+</button>
             <span id="study-count" class="study-count">0</span>
@@ -75,7 +75,7 @@
               <button id="clear-button" class="text-button" type="button">Clear imported</button>
             </div>
             <div id="import-list" class="study-list" role="list"></div>
-            <p id="imports-empty" class="empty-note">Use + to import a YAML specification.</p>
+            <p id="imports-empty" class="empty-note">Use + for a YAML specification, or choose Audit judge.</p>
           </section>
         </div>
         <p id="storage-status" class="storage-status">Starting…</p>
@@ -85,7 +85,7 @@
         <header class="workspace-header">
           <div>
             <p id="study-kind" class="visually-hidden">No specification loaded</p>
-            <h2 id="study-title">Select or import a specification</h2>
+            <h2 id="study-title">Select a study or choose a workflow</h2>
           </div>
         </header>
 
@@ -115,6 +115,28 @@
               <h2 id="source-heading"><span>specification</span> <small>(source)</small></h2>
               <span id="source-name" class="file-name"></span>
             </div>
+            <p id="audit-verdict" class="audit-verdict" hidden></p>
+            <div id="audit-source-controls" class="audit-source-controls" hidden>
+              <div role="group" aria-label="Audit case view">
+                <button id="audit-sources-button" type="button" aria-pressed="true">Sources</button>
+                <button id="audit-annotations-button" type="button" aria-pressed="false">Annotations</button>
+              </div>
+              <select id="audit-document" aria-label="Source document"></select>
+            </div>
+            <div id="audit-import-panel" class="audit-import-panel" hidden>
+              <h3>Import an annotated evaluation</h3>
+              <p>Supply the protocol, context, candidate response, judge verdict and rationale together with their structured annotations. Sources remain read-only. Raw prose is not automatically translated.</p>
+              <div class="audit-import-buttons">
+                <button id="audit-import-file" type="button">Import JSON</button>
+                <button id="audit-example" type="button">Open example</button>
+              </div>
+              <input id="audit-file" type="file" accept=".json,application/json" hidden>
+              <label for="audit-paste">Or paste a complete replay case</label>
+              <textarea id="audit-paste" rows="10" spellcheck="false"></textarea>
+              <button id="audit-load-paste" type="button">Validate and load</button>
+              <button id="audit-import-cancel" type="button" hidden>Keep current case</button>
+            </div>
+            <div id="audit-annotations" class="audit-annotations" hidden></div>
             <pre id="source-view" class="source-view" tabindex="0"><span class="source-placeholder">Select a specification, then scan or diagnose it.</span></pre>
           </section>
 
@@ -144,6 +166,7 @@
               type="button"
               aria-describedby="workflow-note"
             >Diagnose</button>
+            <button id="audit-mode" class="workflow-button" type="button" aria-pressed="false">Audit judge</button>
           </div>
           <button id="analysis-close" class="drawer-close" type="button" aria-label="Close analysis">×</button>
         </div>
@@ -213,12 +236,20 @@
           </div>
         </div>
 
+        <div id="audit-actions" class="audit-actions" hidden>
+          <button id="audit-new" type="button">New case</button>
+          <button id="audit-replace" type="button">Replace case</button>
+          <button id="audit-export-case" type="button">Export case</button>
+          <button id="audit-export-report" type="button" disabled>Export report</button>
+        </div>
         <p id="analysis-empty" class="analysis-empty">Select a specification to configure an analysis.</p>
         <div id="notice" class="notice" role="status" hidden></div>
       </aside>
     </main>
 
     <button id="drawer-overlay" class="drawer-overlay" type="button" aria-label="Close open panel" hidden></button>
-    <script src="/assets/app.js?v=20" defer></script>
+    <script src="/assets/audit-state.js?v=1" defer></script>
+    <script src="/assets/audit.js?v=1" defer></script>
+    <script src="/assets/app.js?v=21" defer></script>
   </body>
 </html>

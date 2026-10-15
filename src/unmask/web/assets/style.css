@@ -929,3 +929,36 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
     transition-duration: .01ms !important;
   }
 }
+
+/* Replay sources retain their exact text while annotations and proofs scroll independently. */
+.analysis-heading { flex-wrap: wrap; }
+.workflow-toggle { order: 3; width: 100%; margin: 8px 0 0; flex-wrap: wrap; }
+.workflow-button { flex: 1; white-space: nowrap; }
+.study-kind-badge { font-size: .65rem; color: var(--muted); margin-left: auto; }
+.audit-source-controls, .audit-import-buttons, .audit-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.audit-source-controls { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.audit-source-controls > div { display: flex; gap: 6px; }
+.audit-source-controls select { max-width: 100%; }
+.audit-verdict { margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: .8rem; }
+.audit-import-panel, .audit-annotations { padding: 18px; overflow: auto; min-height: 0; }
+.audit-import-panel p, .audit-annotation p, .audit-check p { line-height: 1.55; overflow-wrap: anywhere; }
+.audit-import-panel label { display: block; margin-top: 18px; font-size: .8rem; }
+.audit-import-panel textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 10px; margin: 8px 0; font: .8rem/1.5 monospace; }
+.audit-actions { padding: 16px; }
+.audit-source-controls button, .audit-import-panel button, .audit-actions button, .audit-source-controls select {
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; font-size: .78rem;
+}
+.audit-source-controls button[aria-pressed="true"] { border-color: var(--ink); font-weight: 600; }
+.audit-actions button:disabled { opacity: .45; cursor: default; }
+.audit-note { font-size: .78rem; line-height: 1.5; color: var(--muted); padding: 0 12px; overflow-wrap: anywhere; }
+.audit-dimensions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 9px; margin: 12px; font-size: .78rem; }
+.audit-dimensions dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }
+.audit-annotation { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: .8rem; }
+.audit-annotation h3, .audit-check h3 { font-size: .85rem; }
+.audit-evidence-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.audit-proof { margin-top: 12px; font-size: .75rem; }
+.audit-proof summary { cursor: pointer; }
+.audit-json { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .72rem; line-height: 1.5; }
+[hidden] { display: none !important; }
+
+.source-view.audit-source { white-space: pre-wrap; overflow-wrap: anywhere; }

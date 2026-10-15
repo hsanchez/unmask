@@ -347,3 +347,65 @@ Natural-language ambiguity findings retain the source excerpt, ambiguity rationa
 - `0`: analysis completed, including results with findings or insufficient evidence.
 - `1`: input, model, filesystem, or analysis failure.
 - `2`: invalid command-line arguments reported by `argparse`.
+
+### Audit an existing judge evaluation
+
+```bash
+uv run unmask audit-judge case.json --output report.json
+```
+
+`audit-judge` audits a supplied structured replay locally without a model provider.
+Omit `--output` to print the report as JSON. A completed audit returns exit code 0,
+including uncertain or inconsistent results; invalid inputs return 1. Argument
+errors return 2. Completion does not mean the judge passed the audit.
+
+In the studio, choose **Audit judge**, then **Open example**, import a JSON case,
+or paste a complete case. **Sources** shows the verbatim protocol, context,
+candidate response and observable judge rationale. **Annotations** shows the
+supplied Boolean model, obligations, facts, evidence and provenance. The observed
+PASS/FAIL verdict stays visible. Sources are read-only; **Replace case** validates
+a replacement and invalidates the previous report.
+Use **New case** to import another evaluation while keeping the saved case.
+
+**Run audit** reports observable coverage, procedural adherence, separate context
+grounding, rationale/verdict compatibility and verdict entailment. Evidence links
+open the appropriate source and highlight the exact quoted span. Solver details
+include possible assignments and conflicting assertions. Missing evidence and
+unknown semantic facts remain unknown. A compatible verdict can still be
+underdetermined; an inconsistent base never proves a verdict.
+
+Audits apply only to the supplied formalization and observable evidence. A span
+check verifies a quotation, not its semantic interpretation. Translation status
+is asserted by the annotator. No live natural-language extraction or hidden
+reasoning analysis is performed. Optional gold labels are displayed separately
+and never constrain the solver.
+
+Cases and completed reports stay in browser-local storage. **Export case** saves
+a replay JSON; **Export report** saves the report with its case, content hash and
+auditor/schema versions. Importing a report loads its case and requires a fresh
+audit. Cached results are discarded when their case or auditor version changes.
+
+The version-1 replay schema is demonstrated by
+[`judge-audit.json`](src/unmask/web/samples/judge-audit.json). It includes
+`schema_version`, `id`, `context`, `response`, `rationale`, `verdict`, `protocol`,
+`findings`, `extraction`, optional `grounding_pairs` and optional `gold_verdict`.
+Atoms have judge, context or procedure roles; expressions support Boolean
+constants, atoms, and/or/not/implies/iff. TRUE/FALSE findings need exact evidence
+spans; UNKNOWN findings may omit evidence. Evidence offsets use Unicode code
+points and half-open ranges in the original source. The parser rejects unknown
+fields, duplicate JSON keys, undeclared atoms and incompatible evidence roles.
+Limits: 1 MB case input in the CLI, 128 atoms, 1,024 expression nodes and depth 16.
+The web API caps the complete JSON request at 1 MB, including its wrapper and
+escaping, so its effective case limit is lower. Each audit
+uses a separate Z3 context, a five-second solver budget and one-second query
+limits. Exhausted budgets produce solver-unknown results.
+The server accepts one audit at a time per process. Cancelling stops the browser
+from waiting; the current solver run finishes within its budget before releasing
+the slot.
+
+Run all Python tests with `uv run pytest` and lint/type checks with
+`uv run prek run --all-files`. Replay UI behavior also has dependency-free Node
+checks: `node --test tests/frontend/audit.test.cjs` (Node 22+). These exercise the
+actual UI functions using a small DOM/storage harness; browser layout still
+requires visual inspection. The ported core tests include 150 randomized Boolean
+formulas checked against exhaustive truth tables.
