@@ -14,6 +14,7 @@ from unmask.importer import (
   build_manifest_diagnosis_input,
   imported_regex_manifest,
   load_violations,
+  load_violations_text,
   write_diagnosis_input,
   write_regex_manifest,
 )
@@ -183,3 +184,141 @@ class TestWriters:
     )
     loaded = cast("object", yaml.safe_load(output.read_text(encoding="utf-8")))
     assert loaded == {"name": "test"}
+
+
+class TestPythonRegexImporterSourceShapes:
+  def _load(self, tmp_path: Path, source_text: str) -> tuple[ImportedRegex, ...]:
+    source = tmp_path / "patterns.py"
+    _ = source.write_text(source_text, encoding="utf-8")
+    return PythonRegexImporter().load(source)
+
+  def test_skips_statements_that_are_not_string_constants(self, tmp_path: Path) -> None:
+    regexes = self._load(
+      tmp_path,
+      """\
+import re
+
+_COUNT = 3
+_UNRESOLVED = missing_name
+_BARE: str
+_FIRST, _SECOND = "a", "b"
+_PATTERN: str = "foo"
+PROHIBITED_PATTERNS = _compile_patterns(_PATTERN)
+""",
+    )
+
+    assert [(regex.name, regex.pattern) for regex in regexes] == [("_PATTERN", "foo")]
+
+  @pytest.mark.parametrize(
+    "definition",
+    [
+      "_BAD = 3",
+      "_BAD = lookup()",
+      '_BAD = _UNDEFINED + "suffix"',
+      '_BAD = f"{_UNDEFINED}"',
+      '_BAD = f"{_GOOD!r}"',
+      '_BAD = f"{_GOOD:>5}"',
+    ],
+  )
+  def test_rejects_collection_entries_that_cannot_be_resolved(
+    self, tmp_path: Path, definition: str
+  ) -> None:
+    source = (
+      f'_GOOD = "foo"\n{definition}\nPROHIBITED_PATTERNS = _compile_patterns(_BAD)\n'
+    )
+
+    with pytest.raises(ValueError, match="unresolved _BAD"):
+      _ = self._load(tmp_path, source)
+
+  @pytest.mark.parametrize(
+    "collection",
+    [
+      "[]",
+      "other_function(_PATTERN)",
+      "_compile_patterns(_PATTERN, flags=0)",
+      "module._compile_patterns(_PATTERN)",
+    ],
+  )
+  def test_rejects_collections_that_are_not_direct_calls(
+    self, tmp_path: Path, collection: str
+  ) -> None:
+    source = f'_PATTERN = "foo"\nPROHIBITED_PATTERNS = {collection}\n'
+
+    with pytest.raises(ValueError, match="direct _compile_patterns"):
+      _ = self._load(tmp_path, source)
+
+  def test_rejects_literal_collection_arguments(self, tmp_path: Path) -> None:
+    source = 'PROHIBITED_PATTERNS = _compile_patterns("foo")\n'
+
+    with pytest.raises(TypeError, match="named regex constants"):
+      _ = self._load(tmp_path, source)
+
+
+class TestLoadViolationsFailures:
+  @staticmethod
+  def _violation(**overrides: object) -> str:
+    violation: dict[str, object] = {
+      "context": "please hack",
+      "value": "hack",
+      "location": 7,
+    }
+    violation.update(overrides)
+    return json.dumps({"violations": [violation]})
+
+  def test_rejects_a_json_document_that_is_not_an_object(self) -> None:
+    with pytest.raises(TypeError, match="must contain an object"):
+      _ = load_violations_text("[1]")
+
+  @pytest.mark.parametrize("payload", ["{}", '{"violations": []}', '{"violations": 1}'])
+  def test_rejects_a_missing_or_empty_violation_list(self, payload: str) -> None:
+    with pytest.raises(ValueError, match="non-empty violations list"):
+      _ = load_violations_text(payload)
+
+  def test_rejects_an_entry_that_is_not_an_object(self) -> None:
+    with pytest.raises(TypeError, match=r"violations\[0\] must be an object"):
+      _ = load_violations_text('{"violations": ["text"]}')
+
+  @pytest.mark.parametrize(
+    "overrides,message",
+    [
+      ({"context": ""}, r"violations\[0\]\.context must be a non-empty string"),
+      ({"context": 4}, r"violations\[0\]\.context must be a non-empty string"),
+      ({"value": ""}, r"violations\[0\]\.value must be a non-empty string"),
+      ({"location": -1}, r"location must be a non-negative integer"),
+      ({"location": True}, r"location must be a non-negative integer"),
+      ({"location": "7"}, r"location must be a non-negative integer"),
+      (
+        {"expected_outcome": "maybe", "expected_reason": "why"},
+        r"expected_outcome must be 'allow' or 'block'",
+      ),
+      (
+        {"expected_outcome": "allow", "expected_reason": " "},
+        r"expected_reason must be a non-empty string",
+      ),
+      (
+        {"expected_outcome": "allow", "expected_reason": 3},
+        r"expected_reason must be a non-empty string",
+      ),
+      ({"expected_outcome": "allow"}, r"must be provided together"),
+      ({"expected_reason": "why"}, r"must be provided together"),
+    ],
+  )
+  def test_rejects_invalid_entry_fields(
+    self, overrides: dict[str, object], message: str
+  ) -> None:
+    with pytest.raises(ValueError, match=message):
+      _ = load_violations_text(self._violation(**overrides))
+
+  def test_accepts_a_complete_expected_label(self) -> None:
+    violation = load_violations_text(
+      self._violation(expected_outcome="allow", expected_reason=" Neutral. ")
+    )[0]
+
+    assert violation.expected_outcome == "allow"
+    assert violation.expected_reason == "Neutral."
+
+  def test_rejects_an_empty_text_format_value(self) -> None:
+    with pytest.raises(
+      ValueError, match="violation context must be a non-empty string"
+    ):
+      _ = load_violations_text('context: "" location: 0 value: "x"')

@@ -22,12 +22,12 @@ def _target(*, provider: str = "gemini", project: str | None = None) -> TargetCo
 
 class _Usage:
   def __init__(self, input_tokens: int, output_tokens: int) -> None:
-    self.input_tokens = input_tokens
-    self.output_tokens = output_tokens
+    self.input_tokens: int = input_tokens
+    self.output_tokens: int = output_tokens
 
 
 def test_token_usage_normalizes_provider_counts() -> None:
-  usage = backend_module._token_usage(
+  usage = backend_module.token_usage(
     _Usage(input_tokens=12, output_tokens=7),
     input_name="input_tokens",
     output_name="output_tokens",

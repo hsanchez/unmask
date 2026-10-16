@@ -41,14 +41,14 @@ DEFAULT_PORT = 8765
 logger = logging.getLogger(__name__)
 
 
-def _application_version() -> str:
+def application_version() -> str:
   try:
     return version("unmask")
   except PackageNotFoundError:
     return "development"
 
 
-APPLICATION_VERSION = _application_version()
+APPLICATION_VERSION = application_version()
 
 
 class _LocalServer(Protocol):

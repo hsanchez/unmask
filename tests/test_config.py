@@ -128,3 +128,39 @@ class TestBugFinderConfig:
     config = BugFinderConfig.from_yaml(config_path)
     assert config.load_guardrail().name == "no-medical-advice"
     assert config.load_taxonomy() is None
+
+
+class TestConfigEdgeCases:
+  def test_rules_that_are_all_blank_are_rejected(self, tmp_path: Path) -> None:
+    path = write_yaml(tmp_path / "guardrail.yaml", _guardrail_yaml(rules=[" "]))
+
+    with pytest.raises(ValueError, match="non-empty rule"):
+      _ = load_guardrail(path)
+
+  def test_a_null_thinking_budget_disables_thinking(self, tmp_path: Path) -> None:
+    _ = write_yaml(tmp_path / "guardrail.yaml", _guardrail_yaml())
+    config_path = write_yaml(
+      tmp_path / "config.yaml",
+      {
+        "guardrail": {"file": "guardrail.yaml"},
+        "target": {"project": "test-project", "judge_thinking_budget": None},
+      },
+    )
+
+    assert BugFinderConfig.from_yaml(config_path).target.thinking_budget is None
+
+  def test_load_taxonomy_reads_the_configured_file(self, tmp_path: Path) -> None:
+    _ = write_yaml(tmp_path / "guardrail.yaml", _guardrail_yaml())
+    _ = write_yaml(tmp_path / "taxonomy.yaml", {"bug_types": ["over_strict"]})
+    config_path = write_yaml(
+      tmp_path / "config.yaml",
+      {
+        "guardrail": {"file": "guardrail.yaml"},
+        "taxonomy": {"file": "taxonomy.yaml"},
+        "target": {"project": "test-project"},
+      },
+    )
+
+    taxonomy = BugFinderConfig.from_yaml(config_path).load_taxonomy()
+
+    assert taxonomy == {"bug_types": ["over_strict"]}

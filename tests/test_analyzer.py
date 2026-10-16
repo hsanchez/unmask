@@ -25,7 +25,7 @@ from unmask.solver import (
 
 def test_shared_boolean_boundary_reports_the_invalid_type() -> None:
   with pytest.raises(TypeError, match="expected a Z3 Boolean expression, got str"):
-    require_bool_ref("not a compiled Boolean")
+    _ = require_bool_ref("not a compiled Boolean")
 
 
 @pytest.mark.parametrize(
@@ -74,7 +74,7 @@ def test_boolean_operations_reject_an_incompatible_explicit_context(
   selected_context = z3.Context()
   symbol = z3.Bool("symbol", ctx=operand_context)
   with pytest.raises(z3.Z3Exception, match="[Cc]ontext mismatch"):
-    operation(symbol, context=selected_context)
+    _ = operation(symbol, context=selected_context)
 
 
 @pytest.mark.parametrize("operation", [conjunction, disjunction])
@@ -84,7 +84,7 @@ def test_boolean_operations_reject_mixed_operand_contexts(
   first_context = z3.Context()
   second_context = z3.Context()
   with pytest.raises(z3.Z3Exception, match="[Cc]ontext mismatch"):
-    operation(
+    _ = operation(
       z3.Bool("first", ctx=first_context), z3.Bool("second", ctx=second_context)
     )
 
@@ -100,7 +100,7 @@ def test_empty_boolean_operations_keep_parallel_contexts_isolated(
     symbol = z3.Bool("symbol", ctx=context)
     solver = z3.Solver(ctx=context)
     solver.add(symbol, operation(context=context))
-    return solver.check() == z3.sat
+    return str(solver.check()) == str(z3.sat)
 
   with ThreadPoolExecutor(max_workers=2) as executor:
     assert list(executor.map(solve, range(8))) == [identity] * 8
@@ -303,3 +303,24 @@ class TestSymbolicAnalyzerAnalyze:
       predicate_assignments={"is_educational": False},
     ).analyze()
     assert findings == []
+
+  def test_partial_predicate_assignments_leave_other_predicates_free(self) -> None:
+    model = SymbolicModel(
+      predicates={"is_educational": "desc", "is_urgent": "desc"},
+      safe_condition=((Literal("is_educational"),),),
+      rules=(
+        RuleSemantics(
+          rule_id="rule:1",
+          decision="block",
+          condition=((Literal("is_educational"), Literal("is_urgent")),),
+        ),
+      ),
+    )
+
+    findings = SymbolicAnalyzer(
+      model,
+      _guardrail("rule:1"),
+      predicate_assignments={"is_educational": True},
+    ).analyze()
+
+    assert [finding.bug_type for finding in findings] == ["over_strict"]

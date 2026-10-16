@@ -37,11 +37,13 @@ ignore_missing_imports = true
 
 [tool.basedpyright]
 pythonVersion = "3.14"
+include = ["src", "tests", "examples"]
 reportMissingTypeStubs = false
 allowedUntypedLibraries = ["z3"]
 
 [dependency-groups]
 dev = [
+  "basedpyright>=1.40.2",
   "dotagents",
   "mypy>=1.13",
   "prek>=0.4.13",

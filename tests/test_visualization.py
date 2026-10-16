@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -114,3 +115,49 @@ class TestRenderCollectionIndex:
     }
     html = render_collection_index([result])
     assert "Unavailable" in html
+
+
+class TestDiagnosisVisualizerMalformedReports:
+  def _first_finding(self, report: dict[str, object]) -> dict[str, object]:
+    findings = cast("list[object]", report["findings"])
+    finding = findings[0]
+    assert isinstance(finding, dict)
+    return cast("dict[str, object]", finding)
+
+  def test_rejects_a_non_list_field(self, tmp_path: Path) -> None:
+    report = _report_with_over_strict_finding(tmp_path)
+    report["findings"] = "not-a-list"
+
+    with pytest.raises(TypeError, match="must be a list"):
+      _ = DiagnosisVisualizer().render(report)
+
+  def test_rejects_a_non_string_field(self, tmp_path: Path) -> None:
+    report = _report_with_over_strict_finding(tmp_path)
+    self._first_finding(report)["summary"] = 3
+
+    with pytest.raises(TypeError, match="must be a string"):
+      _ = DiagnosisVisualizer().render(report)
+
+  def test_rejects_a_witness_that_is_not_boolean(self, tmp_path: Path) -> None:
+    report = _report_with_over_strict_finding(tmp_path)
+    proof = cast("dict[str, object]", self._first_finding(report)["proof"])
+    proof["witness"] = {"predicate": "yes"}
+
+    with pytest.raises(TypeError, match="witness must map strings to booleans"):
+      _ = DiagnosisVisualizer().render(report)
+
+  def test_rejects_evidence_with_non_integer_locations(self, tmp_path: Path) -> None:
+    report = _report_with_over_strict_finding(tmp_path)
+    evidence = cast("list[dict[str, object]]", self._first_finding(report)["evidence"])
+    evidence[0]["location"] = {"start": "0", "end": 4}
+
+    with pytest.raises(TypeError, match="start and end must be integers"):
+      _ = DiagnosisVisualizer().render(report)
+
+  def test_rejects_evidence_beyond_the_incident_text(self, tmp_path: Path) -> None:
+    report = _report_with_over_strict_finding(tmp_path)
+    evidence = cast("list[dict[str, object]]", self._first_finding(report)["evidence"])
+    evidence[0]["location"] = {"start": 0, "end": 999}
+
+    with pytest.raises(ValueError, match="exceeds incident text"):
+      _ = DiagnosisVisualizer().render(report)

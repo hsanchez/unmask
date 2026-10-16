@@ -176,7 +176,7 @@ def _json_object(raw: str) -> dict[str, object]:
   fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
   if fenced:
     stripped = fenced.group(1)
-  parsed: object = json.loads(stripped)
+  parsed: object = cast("object", json.loads(stripped))
   if not isinstance(parsed, dict):
     raise TypeError("candidate response must be a JSON object")
   return cast("dict[str, object]", parsed)
@@ -201,7 +201,7 @@ def parse_candidate_edit(
   raw_replacements: object = data["replacement_rules"]
   explanation: object = data["explanation"]
   if not isinstance(raw_ids, list) or not all(
-    isinstance(item, str) for item in raw_ids
+    isinstance(item, str) for item in cast("list[object]", raw_ids)
   ):
     raise TypeError("candidate target_rule_ids must be a list of strings")
   target_rule_ids: tuple[str, ...] = tuple(cast("list[str]", raw_ids))
@@ -282,7 +282,7 @@ class RepairCandidateGenerator:
   """Ask a provider for constrained replacements of affected rules."""
 
   def __init__(self, backend: JudgeBackend) -> None:
-    self._backend = backend
+    self._backend: JudgeBackend = backend
 
   def generate(
     self,
@@ -422,11 +422,12 @@ def _example_evaluation_prompt(
   specification: str,
   examples: tuple[TrustedPolicyExample, ...],
 ) -> str:
-  policy: object = yaml.safe_load(specification)
-  if not isinstance(policy, dict):
+  loaded: object = cast("object", yaml.safe_load(specification))
+  if not isinstance(loaded, dict):
     raise TypeError("specification must be a mapping")
+  policy = cast("dict[str, object]", loaded)
   # Expected answers must stay out of the regression classifier's input.
-  policy.pop("examples", None)
+  _ = policy.pop("examples", None)
   specification = yaml.safe_dump(policy, allow_unicode=True, sort_keys=False)
   cases: list[dict[str, object]] = [
     {"index": index, "content": example.content}
@@ -449,7 +450,7 @@ class PolicyExampleEvaluator:
   """Use a provider to classify trusted cases against revised policy prose."""
 
   def __init__(self, backend: JudgeBackend) -> None:
-    self._backend = backend
+    self._backend: JudgeBackend = backend
 
   def evaluate(
     self,
@@ -506,7 +507,7 @@ def _validate_rule_range(
       raise TypeError(f"candidate range for {rule_id!r} is not a text rule")
   elif not isinstance(original_rule, dict):
     raise TypeError(f"candidate range for {rule_id!r} is not a regex rule")
-  elif original_rule.get("id") != rule_id:
+  elif cast("dict[str, object]", original_rule).get("id") != rule_id:
     raise ValueError(f"candidate range for {rule_id!r} points at another rule")
   return column
 

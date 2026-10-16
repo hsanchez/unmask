@@ -1,20 +1,26 @@
 import itertools
 import json
+import logging
+import time
 from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
 
-from unmask.backend import JudgeResponse
+from tests.helpers import json_list, json_object, load_json_object
+from unmask.backend import JudgeBackend, JudgeResponse, TokenUsage
 from unmask.config import TargetConfig
 from unmask.diagnosis import RegexManifest
+from unmask.repair import ProposedFix, RepairGenerationError
 from unmask.scanning import RegexScanReport
 from unmask.service import (
-  _ObservedBackend,
-  _regex_examples_retained,
+  ObservedBackend,
   bugs,
+  classify_specification,
   diagnose_specification,
   propose_fix,
+  regex_examples_retained,
   validate_specification,
 )
 
@@ -22,7 +28,7 @@ _EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
 
 def test_repair_deadline_prevents_another_provider_call() -> None:
-  backend = _ObservedBackend(
+  backend = ObservedBackend(
     FakeBackend(),
     target=TargetConfig(
       project=None, location="global", judge_model="test", thinking_budget=None
@@ -84,7 +90,7 @@ class FakeBackend:
 
 class SequenceBackend:
   def __init__(self, responses: list[str]) -> None:
-    self.responses = responses
+    self.responses: list[str] = responses
 
   def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
     del prompt, max_tokens
@@ -104,13 +110,21 @@ def _target() -> TargetConfig:
 
 def test_empty_regex_example_set_is_vacuously_retained() -> None:
   manifest = RegexManifest.from_text(
-    "schema_version: 1\nkind: regex\nname: sample\nengine: python_re\n"
-    "scope: agent_output\nrules:\n"
-    "  - id: block-hack\n    action: block\n    pattern: hack\n"
+    """\
+schema_version: 1
+kind: regex
+name: sample
+engine: python_re
+scope: agent_output
+rules:
+  - id: block-hack
+    action: block
+    pattern: hack
+"""
   )
   report = RegexScanReport(manifest=manifest, cases=(), taxonomy_supplied=False)
 
-  assert _regex_examples_retained(report, report, target_example_hash=None) == (True, 0)
+  assert regex_examples_retained(report, report, target_example_hash=None) == (True, 0)
 
 
 @pytest.mark.parametrize(
@@ -584,8 +598,10 @@ def test_regex_proposed_fix_supports_each_finding_class(bug_type: str) -> None:
   text = (_EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
   baseline = bugs(text, model=_target())
   finding = next(item for item in baseline.findings if item.bug_type == bug_type)
-  manifest = yaml.safe_load(text)
-  manifest_rules = {rule["id"]: rule for rule in manifest["rules"]}
+  manifest = json_object(cast("object", yaml.safe_load(text)))
+  manifest_rules = {
+    json_object(rule)["id"]: json_object(rule) for rule in json_list(manifest["rules"])
+  }
   replacements = {
     rule_id: dict(manifest_rules[rule_id]) for rule_id in finding.rule_ids
   }
@@ -594,8 +610,10 @@ def test_regex_proposed_fix_supports_each_finding_class(bug_type: str) -> None:
   elif bug_type == "contradiction":
     replacements["allow-how-to-education"]["pattern"] = r"(?<=how to )trade\b(?! Acme)"
   else:
-    replacement = replacements["first-time-investor-scope"]
-    replacement["interpretations"][1]["pattern"] = replacement["interpretations"][0][
+    interpretations = json_list(
+      replacements["first-time-investor-scope"]["interpretations"]
+    )
+    json_object(interpretations[1])["pattern"] = json_object(interpretations[0])[
       "pattern"
     ]
   backend = SequenceBackend(
@@ -755,8 +773,10 @@ def test_natural_fix_rejects_changed_predicate_meaning_as_unstable() -> None:
       "explanation": "Narrow the rule.",
     }
   )
-  changed_model = json.loads(_symbolic_response(repaired=True))
-  changed_model["predicates"]["is_recommendation"] = "content mentions an investment"
+  changed_model = load_json_object(_symbolic_response(repaired=True))
+  json_object(changed_model["predicates"])["is_recommendation"] = (
+    "content mentions an investment"
+  )
   evaluation_response = json.dumps(
     {"results": [{"index": 0, "should_block": False, "rationale": "Neutral."}]}
   )
@@ -816,7 +836,7 @@ def _natural_finding_model(bug_type: str, *, repaired: bool) -> str:
         "rationale": "Allow recommendations.",
       }
     )
-  ambiguities = []
+  ambiguities: list[dict[str, object]] = []
   if bug_type == "ambiguity" and not repaired:
     ambiguities.append(
       {
@@ -854,15 +874,19 @@ def test_natural_proposed_fix_supports_each_finding_class(bug_type: str) -> None
   rules = ["Block substantial investment advice."]
   if bug_type == "contradiction":
     rules.append("Allow investment advice.")
-  text = (
-    "name: sample\nsystem_prompt: Be helpful.\nrules:\n"
-    + "".join(f"  - {rule}\n" for rule in rules)
-    + "examples:\n"
-    "  - content: Neutral report.\n    should_block: false\n"
-    "    reasoning: Neutral.\n"
-    "  - content: You should invest.\n    should_block: true\n"
-    "    reasoning: Recommendation.\n"
-  )
+  rule_lines = "".join(f"  - {rule}\n" for rule in rules)
+  text = f"""\
+name: sample
+system_prompt: Be helpful.
+rules:
+{rule_lines}examples:
+  - content: Neutral report.
+    should_block: false
+    reasoning: Neutral.
+  - content: You should invest.
+    should_block: true
+    reasoning: Recommendation.
+"""
   target = _target()
   baseline_backend = SequenceBackend([_natural_finding_model(bug_type, repaired=False)])
   baseline = bugs(text, model=target, backend_factory=lambda config: baseline_backend)
@@ -909,3 +933,279 @@ def test_natural_proposed_fix_supports_each_finding_class(bug_type: str) -> None
   )
 
   assert result.status == "validated", result.to_dict()
+
+
+@pytest.mark.parametrize(
+  "text,error,message",
+  [
+    ("- a\n- b\n", TypeError, "must be a YAML mapping"),
+    ("kind: other\nrules: []\n", ValueError, "unsupported specification kind: 'other'"),
+    ("name: sample\nrules: []\n", ValueError, "must be a regex manifest"),
+  ],
+)
+def test_classification_rejects_unsupported_documents(
+  text: str, error: type[Exception], message: str
+) -> None:
+  with pytest.raises(error, match=message):
+    _ = classify_specification(text)
+
+
+def test_diagnosis_without_a_matching_rule_reports_no_matching_rule() -> None:
+  specification = (_EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+  violations = json.dumps(
+    {
+      "violations": [
+        {"context": "entirely unrelated words", "value": "unrelated", "location": 9}
+      ]
+    }
+  )
+
+  result = diagnose_specification(specification, violations)
+
+  assert result.summary["status"] == "no_matching_rule"
+
+
+def test_diagnosis_proposed_fix_requires_violations() -> None:
+  text = (_EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+
+  with pytest.raises(ValueError, match="violations are required"):
+    _ = propose_fix(
+      text,
+      specification_name="regexes.yaml",
+      taxonomy_text=None,
+      violations_text=None,
+      workflow="diagnose",
+      finding_id="finding",
+      expected_content_hash="hash",
+      target=_target(),
+    )
+
+
+def test_regex_proposed_fix_with_an_invalid_pattern_is_an_invalid_candidate() -> None:
+  text = (_EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+  baseline = bugs(text, model=_target())
+  finding = next(item for item in baseline.findings if item.bug_type == "over_strict")
+  manifest = json_object(cast("object", yaml.safe_load(text)))
+  rules = {
+    json_object(rule)["id"]: json_object(rule) for rule in json_list(manifest["rules"])
+  }
+  backend = SequenceBackend(
+    [
+      json.dumps(
+        {
+          "target_rule_ids": list(finding.rule_ids),
+          "replacement_rules": {
+            rule_id: {**rules[rule_id], "pattern": "(unclosed"}
+            for rule_id in finding.rule_ids
+          },
+          "explanation": "Break the pattern.",
+        }
+      )
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="regexes.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=finding.id,
+    expected_content_hash=baseline.content_hash,
+    target=_target(),
+    backend_factory=lambda config: backend,
+  )
+
+  validity = next(
+    check for check in result.validation_checks if check.code == "valid_specification"
+  )
+  assert result.status == "unavailable"
+  assert validity.status == "failed"
+  assert result.unavailable_reasons == ("invalid_candidate",)
+
+
+OVER_STRICT_TEXT = """\
+name: sample
+system_prompt: Be helpful.
+rules:
+  - Block any mention of investing.
+examples:
+  - content: Neutral report.
+    should_block: false
+    reasoning: Neutral.
+"""
+
+NEUTRAL_EVALUATION = json.dumps(
+  {"results": [{"index": 0, "should_block": False, "rationale": "Neutral."}]}
+)
+
+
+def _propose_over_strict_fix(
+  revision_responses: list[str],
+) -> tuple[ProposedFix, JudgeBackend]:
+  target = _target()
+  baseline_backend = SequenceBackend([_symbolic_response(repaired=False)])
+  baseline = bugs(
+    OVER_STRICT_TEXT, model=target, backend_factory=lambda config: baseline_backend
+  )
+  candidate = json.dumps(
+    {
+      "target_rule_ids": ["rule:1"],
+      "replacement_rules": {"rule:1": "Block investment recommendations."},
+      "explanation": "Narrow the rule.",
+    }
+  )
+  backend = SequenceBackend(
+    [_symbolic_response(repaired=False), candidate, *revision_responses]
+  )
+  result = propose_fix(
+    OVER_STRICT_TEXT,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target,
+    backend_factory=lambda config: backend,
+  )
+  return result, backend
+
+
+def test_natural_fix_that_leaves_the_target_finding_is_unavailable() -> None:
+  unrepaired = _symbolic_response(repaired=False)
+
+  result, _ = _propose_over_strict_fix(
+    [unrepaired, unrepaired, NEUTRAL_EVALUATION, NEUTRAL_EVALUATION]
+  )
+
+  assert result.status == "unavailable"
+  assert "target_finding_remains" in result.unavailable_reasons
+
+
+def test_natural_fix_that_introduces_a_finding_is_unavailable() -> None:
+  ambiguous = _natural_finding_model("ambiguity", repaired=False)
+
+  result, _ = _propose_over_strict_fix(
+    [ambiguous, ambiguous, NEUTRAL_EVALUATION, NEUTRAL_EVALUATION]
+  )
+
+  assert result.status == "unavailable"
+  assert "new_findings" in result.unavailable_reasons
+
+
+def test_natural_fix_with_an_unparseable_revision_extraction_raises() -> None:
+  with pytest.raises(RepairGenerationError, match="semantic extraction"):
+    _ = _propose_over_strict_fix(["not json"] * 6)
+
+
+def test_natural_fix_with_incomplete_example_evaluation_raises() -> None:
+  repaired = _symbolic_response(repaired=True)
+  empty_evaluation = json.dumps({"results": []})
+
+  with pytest.raises(RepairGenerationError, match="example evaluation"):
+    _ = _propose_over_strict_fix([repaired, repaired, empty_evaluation])
+
+
+class _FailingBackend:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
+    del prompt, max_tokens
+    raise ConnectionError("secret provider detail")
+
+
+def _observe(backend: JudgeBackend, *, deadline: float) -> ObservedBackend:
+  return ObservedBackend(
+    backend,
+    target=_target(),
+    call_numbers=itertools.count(1),
+    deadline=deadline,
+  )
+
+
+def test_provider_failures_are_reported_without_provider_detail(
+  caplog: pytest.LogCaptureFixture,
+) -> None:
+  observed = _observe(_FailingBackend(), deadline=time.perf_counter() + 60)
+
+  with pytest.raises(RuntimeError, match="see server logs") as caught:
+    _ = observed.judge("prompt")
+
+  assert "secret provider detail" not in str(caught.value)
+  assert any("secret provider detail" in str(r.exc_info) for r in caplog.records)
+
+
+def test_model_call_logs_include_token_usage(caplog: pytest.LogCaptureFixture) -> None:
+  class UsageBackend:
+    def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
+      del prompt, max_tokens
+      return JudgeResponse("{}", TokenUsage(3, 4, 7))
+
+  observed = _observe(UsageBackend(), deadline=time.perf_counter() + 60)
+
+  with caplog.at_level(logging.INFO, logger="unmask.service"):
+    _ = observed.judge("prompt")
+
+  record = caplog.records[-1]
+  assert record.__dict__["total_tokens"] == 7
+  assert record.__dict__["output_characters"] == 2
+
+
+def test_diagnosis_with_matching_rules_and_no_defect_reports_no_supported_defect() -> (
+  None
+):
+  specification = """\
+kind: regex
+name: sample
+rules:
+  - id: block-hack
+    action: block
+    pattern: hack
+"""
+  violations = json.dumps(
+    {
+      "violations": [
+        {
+          "context": "please hack now",
+          "value": "hack",
+          "location": 7,
+          "expected_outcome": "block",
+          "expected_reason": "The rule is meant to block this.",
+        }
+      ]
+    }
+  )
+
+  result = diagnose_specification(specification, violations)
+
+  assert result.summary["status"] == "no_supported_defect"
+
+
+@pytest.mark.parametrize(
+  "overrides,message",
+  [
+    ({"expected_content_hash": "stale"}, "analysis inputs changed"),
+    ({"finding_id": "missing"}, "finding is no longer present"),
+  ],
+)
+def test_proposed_fix_rejects_stale_analysis_bindings(
+  overrides: dict[str, str], message: str
+) -> None:
+  text = (_EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+  baseline = bugs(text, model=_target())
+  arguments = {
+    "finding_id": baseline.findings[0].id,
+    "expected_content_hash": baseline.content_hash,
+  }
+  arguments.update(overrides)
+
+  with pytest.raises(LookupError, match=message):
+    _ = propose_fix(
+      text,
+      specification_name="regexes.yaml",
+      taxonomy_text=None,
+      violations_text=None,
+      workflow="scan",
+      finding_id=arguments["finding_id"],
+      expected_content_hash=arguments["expected_content_hash"],
+      target=_target(),
+    )

@@ -675,7 +675,7 @@ def _regex_case_passes(case: RegexScanCase) -> bool:
   return _expected_outcome_passes(case.example.expected_action, actions)
 
 
-def _regex_examples_retained(
+def regex_examples_retained(
   baseline: RegexScanReport,
   revised: RegexScanReport,
   *,
@@ -747,7 +747,7 @@ def _natural_rule_semantics(model: SymbolicModel) -> dict[str, tuple[object, ...
   return semantics
 
 
-class _ObservedBackend:
+class ObservedBackend:
   def __init__(
     self,
     backend: JudgeBackend,
@@ -868,7 +868,7 @@ def _validate_regex_fix(
   scan_examples_pass: bool = False
   scan_case_count: int = 0
   if baseline_scan.regex_report is not None and revised_scan.regex_report is not None:
-    scan_examples_pass, scan_case_count = _regex_examples_retained(
+    scan_examples_pass, scan_case_count = regex_examples_retained(
       baseline_scan.regex_report,
       revised_scan.regex_report,
       target_example_hash=fingerprint.example_content_hash,
@@ -1032,7 +1032,7 @@ def propose_fix(
   deadline: float = time.perf_counter() + 300
 
   def observed_backend_factory(config: TargetConfig) -> JudgeBackend:
-    return _ObservedBackend(
+    return ObservedBackend(
       backend_factory(config),
       target=config,
       call_numbers=call_numbers,

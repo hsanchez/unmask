@@ -46,7 +46,7 @@ class JudgeBackend(Protocol):
   def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse: ...
 
 
-def _token_usage(
+def token_usage(
   raw: object,
   *,
   input_name: str,
@@ -283,7 +283,7 @@ class GeminiBackend:
         thinking_config=thinking,
       ),
     )
-    usage: TokenUsage | None = _token_usage(
+    usage: TokenUsage | None = token_usage(
       getattr(response, "usage_metadata", None),
       input_name="prompt_token_count",
       output_name="candidates_token_count",
@@ -326,7 +326,7 @@ class OpenAIBackend:
       max_tokens=max_tokens,
       temperature=0,
     )
-    usage: TokenUsage | None = _token_usage(
+    usage: TokenUsage | None = token_usage(
       getattr(response, "usage", None),
       input_name="prompt_tokens",
       output_name="completion_tokens",
@@ -368,7 +368,7 @@ class AnthropicBackend:
       messages=[{"role": "user", "content": prompt}],
       temperature=0,
     )
-    usage: TokenUsage | None = _token_usage(
+    usage: TokenUsage | None = token_usage(
       getattr(response, "usage", None),
       input_name="input_tokens",
       output_name="output_tokens",

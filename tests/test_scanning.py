@@ -7,6 +7,7 @@ from unmask.diagnosis import RegexExample, RegexManifest, RegexRule
 from unmask.scanning import (
   load_taxonomy_regex_examples,
   merge_regex_examples,
+  parse_taxonomy_regex_examples,
   scan_regex_manifest,
 )
 
@@ -99,3 +100,36 @@ class TestScanRegexManifest:
     report = scan_regex_manifest(manifest)
     assert len(report.cases) == 1
     assert report.cases[0].example.content == "please hack this"
+
+
+class TestParseTaxonomyRegexExamples:
+  def test_a_taxonomy_without_regex_examples_yields_none(self) -> None:
+    assert parse_taxonomy_regex_examples("other: 1\n") == ()
+
+  @pytest.mark.parametrize(
+    "text,error,message",
+    [
+      ("regex_examples_version: 1\nregex_examples: x\n", TypeError, "must be a list"),
+      (
+        "regex_examples_version: 1\nregex_examples: [x]\n",
+        TypeError,
+        r"regex_examples\[0\] must be a mapping",
+      ),
+    ],
+  )
+  def test_rejects_invalid_example_shapes(
+    self, text: str, error: type[Exception], message: str
+  ) -> None:
+    with pytest.raises(error, match=message):
+      _ = parse_taxonomy_regex_examples(text)
+
+
+def test_scan_rejects_both_taxonomy_path_and_text(tmp_path: Path) -> None:
+  manifest = RegexManifest(
+    name="sample", rules=(RegexRule(id="rule:1", pattern="hack", action="block"),)
+  )
+
+  with pytest.raises(ValueError, match="not both"):
+    _ = scan_regex_manifest(
+      manifest, tmp_path / "taxonomy.yaml", taxonomy_text="regex_examples: []"
+    )

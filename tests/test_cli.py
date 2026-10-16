@@ -1,16 +1,18 @@
 import json
 import webbrowser
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 import unmask.cli as cli_module
-from tests.helpers import write_yaml
+from tests.helpers import REPLAY_FIXTURES, load_json_object, write_yaml
 from unmask.backend import JudgeResponse
 from unmask.cli import main
 from unmask.config import TargetConfig
 from unmask.models import SymbolicModel
+from unmask.service import BackendFactory, ScanResult, bugs
 
 
 def _write_guardrail(tmp_path: Path) -> Path:
@@ -112,6 +114,14 @@ class TestMainArgumentParsing:
   def test_extract_is_not_a_public_command(self) -> None:
     with pytest.raises(SystemExit):
       _ = main(["extract"])
+
+  def test_rejects_non_integer_thinking_budget(
+    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    with pytest.raises(SystemExit):
+      _ = main(["scan", str(_write_guardrail(tmp_path)), "--thinking-budget", "many"])
+
+    assert "must be an integer" in capsys.readouterr().err
 
   @pytest.mark.parametrize("port", ["-1", "65536"])
   def test_rejects_invalid_serve_port(self, port: str) -> None:
@@ -388,6 +398,32 @@ class TestMainDiagnose:
     assert exit_code == 0
     assert "warning: could not open" in capsys.readouterr().err
 
+  def test_browser_error_is_a_non_fatal_warning(
+    self,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+  ) -> None:
+    def broken_browser(url: str) -> bool:
+      del url
+      raise webbrowser.Error("no runnable browser")
+
+    monkeypatch.setattr(webbrowser, "open", broken_browser)
+
+    exit_code = main(
+      [
+        "diagnose",
+        str(_write_regex_manifest(tmp_path)),
+        str(_write_violations(tmp_path)),
+        "--output",
+        str(tmp_path / "output"),
+        "--open",
+      ]
+    )
+
+    assert exit_code == 0
+    assert "no runnable browser" in capsys.readouterr().err
+
   def test_reports_invalid_violation_location(
     self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
   ) -> None:
@@ -455,3 +491,75 @@ class TestMainDiagnose:
 
     assert exit_code == 1
     assert opened == []
+
+
+class TestMainAuditJudge:
+  def test_rejects_invalid_json_with_an_error_exit(
+    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    case = tmp_path / "bad.json"
+    _ = case.write_text('{"bad":', encoding="utf-8")
+
+    assert main(["audit-judge", str(case)]) == 1
+    assert "invalid JSON" in capsys.readouterr().err
+
+  def test_prints_the_report_when_no_output_file_is_given(
+    self, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    case = REPLAY_FIXTURES / "A_correct_procedurally_adherent.json"
+
+    assert main(["audit-judge", str(case)]) == 0
+
+    report = load_json_object(capsys.readouterr().out)
+    assert report["status"] == "completed"
+
+
+class TestMainScanInvariants:
+  @pytest.mark.parametrize(
+    "missing,message",
+    [
+      ("regex_report", "regex scan did not produce a regex report"),
+      ("symbolic_model", "natural-language scan did not produce a symbolic model"),
+    ],
+  )
+  def test_incomplete_scan_results_are_reported_as_errors(
+    self,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    missing: str,
+    message: str,
+  ) -> None:
+    specification = (
+      _write_regex_manifest(tmp_path)
+      if missing == "regex_report"
+      else _write_guardrail(tmp_path)
+    )
+
+    def incomplete(
+      text: str,
+      *,
+      specification_name: str,
+      taxonomy_text: str | None,
+      model: TargetConfig,
+      backend_factory: BackendFactory,
+    ) -> ScanResult:
+      result = bugs(
+        text,
+        specification_name=specification_name,
+        taxonomy_text=taxonomy_text,
+        model=model,
+        backend_factory=backend_factory,
+      )
+      return replace(result, **{missing: None})
+
+    def fake_backend(config: TargetConfig) -> FakeBackend:
+      return FakeBackend(config)
+
+    monkeypatch.setattr(cli_module, "bugs", incomplete)
+    monkeypatch.setattr(cli_module, "create_backend", fake_backend)
+
+    exit_code = main(["scan", str(specification), "--output", str(tmp_path / "out")])
+
+    assert exit_code == 1
+    assert message in capsys.readouterr().err

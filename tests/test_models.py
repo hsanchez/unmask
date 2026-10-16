@@ -43,7 +43,7 @@ def test_source_document_preserves_verbatim_text_and_structural_ranges() -> None
 
 
 def test_canonical_json_hash_preserves_legacy_encoding() -> None:
-  payload = {"z": ["🚫", {"b": False, "a": None}], "a": "é"}
+  payload: dict[str, object] = {"z": ["🚫", {"b": False, "a": None}], "a": "é"}
   expected = hashlib.sha256(
     json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
   ).hexdigest()
