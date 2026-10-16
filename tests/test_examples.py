@@ -1,9 +1,13 @@
 import json
+import runpy
+import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
 import pytest
 
+import unmask
 import unmask.cli as cli_module
 from unmask.backend import JudgeResponse
 from unmask.cli import main
@@ -277,3 +281,60 @@ def test_natural_language_catalog_demonstrates_each_defect(
   assert metadata["ambiguityRationale"]
   assert metadata["interpretationARationale"]
   assert metadata["interpretationBRationale"]
+
+
+@pytest.mark.parametrize("script", ["bugs.py", "adherence.py"])
+def test_local_api_examples_run_outside_the_checkout(
+  script: str, tmp_path: Path
+) -> None:
+  result = subprocess.run(
+    [sys.executable, str(EXAMPLES_DIRECTORY / script)],
+    cwd=tmp_path,
+    check=True,
+    capture_output=True,
+    text=True,
+    timeout=60,
+  )
+  if script == "bugs.py":
+    assert "Regex specification:" in result.stdout
+    assert all(
+      kind in result.stdout for kind in ("over_strict", "contradiction", "ambiguity")
+    )
+  else:
+    assert "JSON replay: OK / SATISFIED" in result.stdout
+    assert "Python case: OK / SATISFIED" in result.stdout
+    assert "Scope:" in result.stdout
+
+
+def test_model_api_example_uses_the_public_api_without_live_calls(
+  monkeypatch: pytest.MonkeyPatch,
+  capsys: pytest.CaptureFixture[str],
+) -> None:
+  find_bugs = unmask.bugs
+  calls: list[unmask.TargetConfig] = []
+
+  def run_bugs(
+    specification_text: str,
+    *,
+    specification_name: str,
+    taxonomy_text: str,
+    model: unmask.TargetConfig,
+  ) -> unmask.ScanResult:
+    calls.append(model)
+    return find_bugs(
+      specification_text,
+      specification_name=specification_name,
+      taxonomy_text=taxonomy_text,
+      model=model,
+      backend_factory=CatalogBackend,
+    )
+
+  monkeypatch.setattr(unmask, "bugs", run_bugs)
+  _ = runpy.run_path(
+    str(EXAMPLES_DIRECTORY / "bugs_with_model.py"), run_name="__main__"
+  )
+  assert len(calls) == 1
+  assert calls[0].provider == "openai"
+  output = capsys.readouterr().out
+  assert "Natural-language specification:" in output
+  assert all(kind in output for kind in ("over_strict", "contradiction", "ambiguity"))

@@ -16,20 +16,14 @@ from dotenv import dotenv_values, find_dotenv
 
 from .backend import create_backend
 from .config import TargetConfig
-from .diagnosis import (
-  DiagnosisConfig,
-  DiagnosisReport,
-  RegexDiagnoser,
-  RegexManifest,
-)
-from .importer import ImportedViolation, load_violations
+from .diagnosis import DiagnosisReport
 from .judge import audit_judge_case
 from .service import (
   DEFAULT_MODELS,
   ScanResult,
+  bugs,
+  diagnose_specification,
   diagnosis_status,
-  incident_from_violation,
-  scan_specification,
 )
 from .visualization import (
   CollectionResult,
@@ -130,13 +124,13 @@ def _run_scan(
   output_directory: Path,
   target: TargetConfig,
 ) -> int:
-  result: ScanResult = scan_specification(
+  result: ScanResult = bugs(
     specification_path.read_text(encoding="utf-8"),
     specification_name=specification_path.name,
     taxonomy_text=(
       taxonomy_path.read_text(encoding="utf-8") if taxonomy_path is not None else None
     ),
-    target=target,
+    model=target,
     backend_factory=create_backend,
   )
   if result.specification_kind == "regex":
@@ -174,39 +168,22 @@ def _run_scan(
   return 0
 
 
-def _diagnosis_config(
-  manifest_path: Path,
-  manifest: RegexManifest,
-  violation: ImportedViolation,
-  *,
-  index: int,
-  output_directory: Path,
-) -> DiagnosisConfig:
-  return DiagnosisConfig(
-    source=manifest_path.resolve(),
-    name=f"{manifest.name} incident {index}",
-    incident=incident_from_violation(violation),
-    rules=manifest.rules,
-    output_path=output_directory / "incidents" / f"{index:04d}" / "report.json",
-    match_timeout_seconds=manifest.match_timeout_seconds,
-  )
-
-
 def _write_diagnosis_artifacts(
   report: DiagnosisReport,
-  config: DiagnosisConfig,
+  source: Path,
   *,
   index: int,
   output_directory: Path,
 ) -> CollectionResult:
   report_data: dict[str, object] = report.to_dict()
-  _write_json(config.output_path, report_data)
-  visualization_path: Path = config.output_path.with_suffix(".html")
+  report_path = output_directory / "incidents" / f"{index:04d}" / "report.json"
+  _write_json(report_path, report_data)
+  visualization_path: Path = report_path.with_suffix(".html")
   html: str = DiagnosisVisualizer().render(report_data)
   _ = write_visualization(visualization_path, html)
   print(f"wrote {visualization_path}")
 
-  relative_report: Path = config.output_path.relative_to(output_directory)
+  relative_report: Path = report_path.relative_to(output_directory)
   relative_visualization: Path = visualization_path.relative_to(output_directory)
   source_location: int = cast("int", report.incident.source_location)
   return CollectionResult(
@@ -217,7 +194,7 @@ def _write_diagnosis_artifacts(
     status=diagnosis_status(report),
     expectedOutcomeSource=report.incident.expected_outcome_source,
     expectedReason=report.incident.expected_reason,
-    config=str(config.source),
+    config=str(source),
     report=relative_report.as_posix(),
     visualization=relative_visualization.as_posix(),
   )
@@ -240,30 +217,21 @@ def _run_diagnose(
   output_directory: Path,
   open_index: bool,
 ) -> int:
-  manifest: RegexManifest = RegexManifest.from_yaml(manifest_path)
-  violations: tuple[ImportedViolation, ...] = load_violations(violations_path)
-  configs: tuple[DiagnosisConfig, ...] = tuple(
-    _diagnosis_config(
-      manifest_path,
-      manifest,
-      violation,
-      index=index,
-      output_directory=output_directory,
-    )
-    for index, violation in enumerate(violations, start=1)
+  result = diagnose_specification(
+    manifest_path.read_text(encoding="utf-8"),
+    violations_path.read_text(encoding="utf-8"),
+    specification_name=manifest_path.name,
+    source=manifest_path.resolve(),
   )
-  reports: tuple[DiagnosisReport, ...] = RegexDiagnoser().diagnose_many(configs)
+  reports = result.diagnosis_reports or ()
   results: list[CollectionResult] = [
     _write_diagnosis_artifacts(
       report,
-      config,
+      manifest_path.resolve(),
       index=index,
       output_directory=output_directory,
     )
-    for index, (report, config) in enumerate(
-      zip(reports, configs, strict=True),
-      start=1,
-    )
+    for index, report in enumerate(reports, start=1)
   ]
 
   index_path: Path = output_directory / "index.html"

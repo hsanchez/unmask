@@ -223,20 +223,20 @@ def test_scan_passes_selected_thinking_budget_to_service(
 ) -> None:
   targets: list[TargetConfig] = []
 
-  def fake_scan_specification(
+  def fake_bugs(
     specification_text: str,
     *,
     specification_name: str,
     taxonomy_text: str | None,
-    target: TargetConfig,
+    model: TargetConfig,
   ) -> FakeScanResult:
     assert specification_text
     assert specification_name == "sample.yaml"
     assert taxonomy_text is None
-    targets.append(target)
+    targets.append(model)
     return FakeScanResult()
 
-  monkeypatch.setattr(webapp_module, "scan_specification", fake_scan_specification)
+  monkeypatch.setattr(webapp_module, "bugs", fake_bugs)
   response = application.test_client().post(
     "/api/v1/scans",
     json={

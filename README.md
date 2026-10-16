@@ -16,6 +16,125 @@ Regex analysis executes the supplied rules against trusted labeled examples or r
 
 Python 3.14 or newer is required.
 
+## Python library
+
+The library, CLI, and studio share the same analysis. Library calls accept
+in-memory inputs and do not require a running web server.
+
+Runnable scripts and commands are in [examples/README.md](examples/README.md).
+
+### Find specification bugs
+
+Regex specifications run locally, without provider credentials:
+
+```python
+from pathlib import Path
+import unmask
+
+result = unmask.bugs(Path("regexes.yaml").read_text())
+for finding in result.findings:
+  print(finding.summary)
+```
+
+Natural-language specifications require a configured extraction model and its
+provider extra. `model` accepts the existing `TargetConfig`:
+
+```python
+model = unmask.TargetConfig(
+  provider="openai",
+  judge_model="gpt-4o",
+  project=None,
+  location="global",
+  thinking_budget=None,
+)
+result = unmask.bugs(
+  Path("guardrail.yaml").read_text(),
+  model=model,
+  # taxonomy_text=Path("taxonomy.yaml").read_text(),
+)
+```
+
+Provider credentials come from the process environment. Library imports and
+calls do not load `.env` files. Applications can inject a backend through
+`backend_factory` for testing or integration; it follows the existing
+`unmask.backend.JudgeBackend` protocol. Findings include severity, rationale,
+witnesses, rule IDs, and source references. `result.to_dict()` retains the
+studio's scan JSON format.
+
+Natural-language analysis sends specification and taxonomy content to the selected
+provider and may incur charges. Treat extracted interpretations as model output,
+not trusted ground truth; the solver's conclusions depend on that interpretation.
+
+### Assess protocol adherence
+
+Use the same annotated replay JSON accepted by the studio's **Audit judge**
+workflow:
+
+```python
+case_json = Path("annotated-case.json").read_text()
+case = unmask.VerificationCase.from_json(case_json)
+result = unmask.adherence(case)
+
+print(result.status, result.overall)
+for finding in result.findings:
+  print(finding.summary)
+for check in result.checks:
+  print(check.dimension, check.status)
+```
+
+`from_json` accepts a string containing JSON. It validates the protocol's atoms,
+constraints, requirements and decision expression, context, candidate response,
+judge rationale/verdict, annotated facts and exact evidence spans, grounding
+pairs, and extraction metadata. A gold verdict is optional. The packaged
+`unmask/web/samples/judge-audit.json` is a complete example.
+
+Direct Python construction uses the same invariants and typed inputs:
+
+```python
+case = unmask.VerificationCase(
+  id="example",
+  protocol_text="PASS iff the context supports the response.",
+  context="Alice is CTO.",
+  response="Alice is CTO.",
+  rationale="Supported. PASS.",
+  verdict="PASS",
+  atoms=(unmask.Atom("supported", "judge", "Judge states support"),),
+  decision=unmask.Expr("atom", atom="supported"),
+  annotations=(
+    unmask.Annotation(
+      "supported",
+      unmask.Truth.TRUE,
+      (unmask.Evidence("rationale", 0, 10, "Supported."),),
+      "Judge states support.",
+    ),
+  ),
+  extraction={"provider": "manual", "translation_status": "VALID"},
+)
+result = unmask.adherence(case)
+```
+
+This minimal case establishes verdict entailment but leaves overall adherence
+`UNKNOWN`: no procedural requirements or independent grounding pairs were
+supplied. `annotations` are supplied observations; `result.findings` are
+detected violations or inconsistencies. `result.checks` includes successful and
+inconclusive checks, and `result.report` retains the detailed replay report
+(whose legacy JSON `findings` field denotes annotations).
+
+Adherence runs locally without a model provider. Z3 verifies the supplied
+structured interpretation, not raw prose or hidden reasoning. Empty findings
+do not imply success: always inspect `result.overall`, `result.status`, and
+`result.limitations`. `timeout_ms` bounds each solver query within the existing
+total audit budget. `VerificationCase.to_dict()` exports replay input data.
+
+Invalid replay input raises `unmask.ValidationError` (a `ValueError`);
+malformed specification inputs raise `TypeError`, `ValueError`, or a PyYAML
+error. Provider/execution failures raise `RuntimeError`. Solver uncertainty is
+reported explicitly rather than treated as adherence. JSON and direct case
+construction both validate invariants; there is no unstructured `from_text`
+constructor or automatic annotation extraction.
+
+## Provider setup
+
 Regex scanning and diagnosis work out of the box. Natural-language scanning needs an LLM
 judge backend, selected with `--provider` (default `gemini`) and installed as an optional
 extra:

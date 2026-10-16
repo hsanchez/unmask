@@ -12,9 +12,9 @@ from unmask.scanning import RegexScanReport
 from unmask.service import (
   _ObservedBackend,
   _regex_examples_retained,
+  bugs,
   diagnose_specification,
   propose_fix,
-  scan_specification,
   validate_specification,
 )
 
@@ -178,9 +178,9 @@ def test_natural_scan_normalizes_findings_and_source_references() -> None:
     "  - Allow safe advice.\n"
   )
 
-  result = scan_specification(
+  result = bugs(
     text,
-    target=_target(),
+    model=_target(),
     backend_factory=lambda config: FakeBackend(),
   )
 
@@ -205,7 +205,7 @@ def test_regex_scan_normalizes_case_finding_source_reference() -> None:
     "    expected_action: allow\n    reason: neutral reporting\n"
   )
 
-  result = scan_specification(text, target=_target())
+  result = bugs(text, model=_target())
 
   assert result.specification_kind == "regex"
   assert len(result.findings) == 1
@@ -263,7 +263,7 @@ def test_regex_proposed_fix_is_validated_before_it_is_returned() -> None:
     "  - content: malicious hack\n"
     "    expected_action: block\n    reason: unsafe request\n"
   )
-  baseline = scan_specification(text, target=_target())
+  baseline = bugs(text, model=_target())
   finding = next(item for item in baseline.findings if "block-hack" in item.rule_ids)
   response = json.dumps(
     {
@@ -490,7 +490,7 @@ def test_unvalidated_regex_candidate_text_is_not_returned() -> None:
     "examples:\n  - content: harmless hack report\n"
     "    expected_action: allow\n    reason: neutral reporting\n"
   )
-  baseline = scan_specification(text, target=_target())
+  baseline = bugs(text, model=_target())
   unsafe_pattern = "hack|private-candidate-text"
   backend = SequenceBackend(
     [
@@ -540,7 +540,7 @@ def test_regex_scan_retains_duplicate_content_cases_by_position() -> None:
     "  - content: harmless hack report\n"
     "    expected_action: allow\n    reason: Neutral reporting.\n"
   )
-  baseline = scan_specification(text, target=_target())
+  baseline = bugs(text, model=_target())
   backend = SequenceBackend(
     [
       json.dumps(
@@ -582,7 +582,7 @@ def test_regex_scan_retains_duplicate_content_cases_by_position() -> None:
 @pytest.mark.parametrize("bug_type", ["over_strict", "contradiction", "ambiguity"])
 def test_regex_proposed_fix_supports_each_finding_class(bug_type: str) -> None:
   text = (_EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
-  baseline = scan_specification(text, target=_target())
+  baseline = bugs(text, model=_target())
   finding = next(item for item in baseline.findings if item.bug_type == bug_type)
   manifest = yaml.safe_load(text)
   manifest_rules = {rule["id"]: rule for rule in manifest["rules"]}
@@ -630,9 +630,7 @@ def test_natural_proposed_fix_requires_trusted_examples() -> None:
     "name: sample\nsystem_prompt: Be helpful.\nrules:\n"
     "  - Block all advice.\n  - Allow safe advice.\n"
   )
-  baseline = scan_specification(
-    text, target=_target(), backend_factory=lambda config: FakeBackend()
-  )
+  baseline = bugs(text, model=_target(), backend_factory=lambda config: FakeBackend())
   backend = FakeBackend()
 
   result = propose_fix(
@@ -684,9 +682,7 @@ def test_natural_proposed_fix_requires_stable_extraction_and_examples() -> None:
   )
   target = _target()
   baseline_backend = SequenceBackend([_symbolic_response(repaired=False)])
-  baseline = scan_specification(
-    text, target=target, backend_factory=lambda config: baseline_backend
-  )
+  baseline = bugs(text, model=target, backend_factory=lambda config: baseline_backend)
   candidate_response = json.dumps(
     {
       "target_rule_ids": ["rule:1"],
@@ -751,9 +747,7 @@ def test_natural_fix_rejects_changed_predicate_meaning_as_unstable() -> None:
   )
   target = _target()
   baseline_backend = SequenceBackend([_symbolic_response(repaired=False)])
-  baseline = scan_specification(
-    text, target=target, backend_factory=lambda config: baseline_backend
-  )
+  baseline = bugs(text, model=target, backend_factory=lambda config: baseline_backend)
   candidate_response = json.dumps(
     {
       "target_rule_ids": ["rule:1"],
@@ -871,9 +865,7 @@ def test_natural_proposed_fix_supports_each_finding_class(bug_type: str) -> None
   )
   target = _target()
   baseline_backend = SequenceBackend([_natural_finding_model(bug_type, repaired=False)])
-  baseline = scan_specification(
-    text, target=target, backend_factory=lambda config: baseline_backend
-  )
+  baseline = bugs(text, model=target, backend_factory=lambda config: baseline_backend)
   finding = next(item for item in baseline.findings if item.bug_type == bug_type)
   candidate_response = json.dumps(
     {

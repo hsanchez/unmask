@@ -3,7 +3,7 @@ import random
 
 import pytest
 
-from unmask.judge import AuditInput, ValidationError, audit
+from unmask.judge import ValidationError, VerificationCase, audit
 
 
 def data(decision=None, findings=None):
@@ -59,12 +59,12 @@ b = {"atom": "B"}
 )
 def test_unknown_truth_table(op, vals, expected):
   d = data(expr(op, a, b), [finding("A", vals[0]), finding("B", vals[1])])
-  assert audit(AuditInput.parse(d))["rationale_verdict"]["status"] == expected
+  assert audit(VerificationCase.parse(d))["rationale_verdict"]["status"] == expected
 
 
 def test_inconsistency():
   d = data(findings=[finding("A", "TRUE"), finding("A", "FALSE")])
-  r = audit(AuditInput.parse(d))
+  r = audit(VerificationCase.parse(d))
   assert r["status"] == "INCONSISTENT_FINDINGS"
   assert r["rationale_verdict"]["status"] == "INCONSISTENT_BASE"
   assert r["verdict_entailed"] is None
@@ -76,7 +76,8 @@ def test_excluded_middle():
     (expr("and", a, expr("not", a)), "REFUTED"),
   ]:
     assert (
-      audit(AuditInput.parse(data(decision)))["rationale_verdict"]["status"] == expected
+      audit(VerificationCase.parse(data(decision)))["rationale_verdict"]["status"]
+      == expected
     )
 
 
@@ -89,7 +90,7 @@ def test_no_grounding_contamination():
   f["evidence"][0]["source"] = "context"
   d["findings"].append(f)
   d["grounding_pairs"] = [["A", "C"]]
-  r = audit(AuditInput.parse(d))
+  r = audit(VerificationCase.parse(d))
   assert r["rationale_verdict"]["status"] == "ENTAILED"
   assert r["grounding_correctness"] == "VIOLATED"
   assert r["status"] == "OK"
@@ -100,7 +101,7 @@ def test_requirement_not_folded():
   d["protocol"]["requirements"] = [
     {"id": "req", "description": "x", "expr": b, "addressed": {"const": True}}
   ]
-  r = audit(AuditInput.parse(d))
+  r = audit(VerificationCase.parse(d))
   assert r["rationale_verdict"]["status"] == "ENTAILED"
   assert r["procedural_adherence"] == "VIOLATED"
 
@@ -111,7 +112,7 @@ def test_witness_pass_collision():
     {"id": "PASS", "role": "judge", "description": "user atom PASS"}
   )
   d["findings"].append(finding("PASS", "FALSE"))
-  r = audit(AuditInput.parse(d))
+  r = audit(VerificationCase.parse(d))
   # User atom PASS is false, even though verdict is PASS. Must not lose it.
   assert r["rationale_verdict"]["witnesses"]["true"]["PASS"] is False
 
@@ -135,7 +136,7 @@ def test_malformed_expr(bad):
   d = data()
   d["protocol"]["decision"] = bad
   with pytest.raises(ValidationError):
-    AuditInput.parse(d)
+    VerificationCase.parse(d)
 
 
 def test_random_formulas_against_exhaustive_truth_tables():
@@ -177,7 +178,7 @@ def test_random_formulas_against_exhaustive_truth_tables():
     d["protocol"]["constraints"] = [{"id": "c", "description": "x", "expr": constraint}]
     observed = rng.choice(["PASS", "FAIL"])
     d["verdict"] = observed
-    r = audit(AuditInput.parse(d))
+    r = audit(VerificationCase.parse(d))
     expected = (
       "INCONSISTENT_BASE"
       if not outcomes

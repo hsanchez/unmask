@@ -19,15 +19,20 @@ from werkzeug.exceptions import BadRequest, RequestEntityTooLarge, UnsupportedMe
 from werkzeug.serving import make_server
 
 from .config import TargetConfig
-from .judge import AUDITOR_VERSION, audit_judge_case, validate_audit_case
+from .judge import (
+  AUDITOR_VERSION,
+  VerificationCase,
+  audit_judge_case,
+  validate_audit_case,
+)
 from .repair import PROPOSED_FIX_SCHEMA_VERSION, RepairGenerationError
 from .service import (
   DEFAULT_MODELS,
   PROVIDER_MODELS,
   ScanResult,
+  bugs,
   diagnose_specification,
   propose_fix,
-  scan_specification,
   validate_specification,
 )
 
@@ -292,11 +297,11 @@ def create_app() -> Flask:
       )
       taxonomy = _optional_document(data.get("taxonomy"), field="taxonomy")
       target: TargetConfig = _target_config(data)
-      result: ScanResult = scan_specification(
+      result: ScanResult = bugs(
         specification_text,
         specification_name=specification_name,
         taxonomy_text=taxonomy[1] if taxonomy is not None else None,
-        target=target,
+        model=target,
       )
       return jsonify(result.to_dict())
     except (TypeError, ValueError, yaml.YAMLError) as exc:
@@ -368,14 +373,15 @@ def create_app() -> Flask:
       data = _json_object()
       _only_fields(data, frozenset({"case", "contentHash"}))
       _, text = _document(data.get("case"), field="case")
-      validated = validate_audit_case(text)
+      case = VerificationCase.from_json(text)
+      validated = validate_audit_case(case)
       if data.get("contentHash") != validated["contentHash"]:
         return _error(
           "The audit case changed. Validate it again before running.",
           code="stale_audit_case",
           status=409,
         )
-      return jsonify(audit_judge_case(text))
+      return jsonify(audit_judge_case(case))
     except (TypeError, ValueError) as exc:
       return _error(str(exc), code="invalid_audit_case", status=400)
     except RuntimeError:

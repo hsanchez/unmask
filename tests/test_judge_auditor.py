@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import z3
 
-from unmask.judge import AuditInput, Expr, audit, compile_expr
+from unmask.judge import Expr, VerificationCase, audit, compile_expr
 from unmask.solver import Engine
 
 EXAMPLES = Path(__file__).resolve().parent / "fixtures/judge_audit"
@@ -78,7 +78,7 @@ def load(prefix="A_"):
 
 
 def run(data):
-  return audit(AuditInput.parse(data))
+  return audit(VerificationCase.parse(data))
 
 
 @pytest.mark.parametrize(

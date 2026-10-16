@@ -62,7 +62,17 @@ def load_guardrail_text(text: str) -> Guardrail:
     TypeError: if the YAML document, or a rule or example within it, is malformed.
     ValueError: if `name`, `system_prompt`, or `rules` is missing or empty.
   """
-  raw: dict[str, object] = _mapping(yaml.safe_load(text) or {}, name="guardrail")
+  return guardrail_from_data(cast("object", yaml.safe_load(text)))
+
+
+def guardrail_from_data(data: object) -> Guardrail:
+  """Validate a decoded guardrail mapping.
+
+  Raises:
+    TypeError: if the mapping, rules, or examples have invalid shapes.
+    ValueError: if required fields are empty.
+  """
+  raw: dict[str, object] = _mapping(data or {}, name="guardrail")
   name: str = str(raw.get("name", "")).strip()
   system_prompt: str = str(raw.get("system_prompt", "")).strip()
   if not name or not system_prompt:

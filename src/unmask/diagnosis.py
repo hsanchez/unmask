@@ -636,7 +636,16 @@ class RegexManifest:
       TypeError: if the document, an example, or `schema_version` has the wrong shape.
       ValueError: if a schema field, `name`, or an example's `source` is invalid.
     """
-    loaded: object = cast("object", yaml.safe_load(stream=text))
+    return cls.from_dict(cast("object", yaml.safe_load(stream=text)))
+
+  @classmethod
+  def from_dict(cls, loaded: object) -> RegexManifest:
+    """Validate a decoded regex manifest.
+
+    Raises:
+      TypeError: if fields have invalid shapes.
+      ValueError: if manifest fields or examples are invalid.
+    """
     raw: dict[str, object] = _mapping(
       raw=loaded or {},
       name="regex manifest",

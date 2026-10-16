@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from unmask.judge import AuditInput, ValidationError
+from unmask.judge import ValidationError, VerificationCase
 
 
 def data():
@@ -43,17 +43,17 @@ def test_invalid_ir_is_rejected(mutate):
   d = data()
   mutate(d)
   with pytest.raises(ValidationError):
-    AuditInput.parse(d)
+    VerificationCase.parse(d)
 
 
 def test_duplicate_json_key():
   with pytest.raises(ValidationError, match="duplicate"):
-    AuditInput.from_json('{"id":"a","id":"b"}')
+    VerificationCase.from_json('{"id":"a","id":"b"}')
 
 
 def test_oversize_bytes():
   with pytest.raises(ValidationError, match="byte limit"):
-    AuditInput.from_json(" " * 1_000_001)
+    VerificationCase.from_json(" " * 1_000_001)
 
 
 def test_expression_depth():
@@ -63,20 +63,20 @@ def test_expression_depth():
     expr = {"op": "not", "args": [expr]}
   d["protocol"]["decision"] = expr
   with pytest.raises(ValidationError, match="resource limit"):
-    AuditInput.parse(d)
+    VerificationCase.parse(d)
 
 
 def test_atom_limit():
   d = data()
   d["protocol"]["atoms"] *= 17
   with pytest.raises(ValidationError, match="128"):
-    AuditInput.parse(d)
+    VerificationCase.parse(d)
 
 
 def test_unknown_needs_no_fabricated_evidence():
   d = data()
   d["findings"][0].update(value="UNKNOWN", evidence=[])
-  AuditInput.parse(d)
+  VerificationCase.parse(d)
 
 
 def test_evidence_can_preserve_an_exact_whitespace_quote():
@@ -86,9 +86,9 @@ def test_evidence_can_preserve_an_exact_whitespace_quote():
     {"source": "rationale", "start": start, "end": start + 1, "quote": " "}
   ]
 
-  parsed = AuditInput.parse(replay)
+  parsed = VerificationCase.parse(replay)
 
-  assert parsed.findings[0].evidence[0].quote == " "
+  assert parsed.annotations[0].evidence[0].quote == " "
 
 
 @pytest.mark.parametrize("field", ["id", "context", "response", "rationale"])
@@ -97,7 +97,7 @@ def test_decoded_replay_rejects_lone_surrogates(field: str, surrogate: int) -> N
   replay = data()
   replay[field] += chr(surrogate)
   with pytest.raises(ValidationError, match="invalid Unicode"):
-    AuditInput.parse(replay)
+    VerificationCase.parse(replay)
 
 
 @pytest.mark.parametrize("surrogate", [0xD800, 0xDFFF])
@@ -105,18 +105,18 @@ def test_json_replay_rejects_escaped_lone_surrogates(surrogate: int) -> None:
   replay = data()
   replay["context"] += chr(surrogate)
   with pytest.raises(ValidationError, match="invalid Unicode"):
-    AuditInput.from_json(json.dumps(replay))
+    VerificationCase.from_json(json.dumps(replay))
 
 
 def test_json_replay_rejects_unescaped_lone_surrogates() -> None:
   with pytest.raises(ValidationError, match="invalid Unicode"):
-    AuditInput.from_json('"' + chr(0xD800) + '"')
+    VerificationCase.from_json('"' + chr(0xD800) + '"')
 
 
 def test_json_replay_accepts_an_escaped_surrogate_pair() -> None:
   replay = data()
   replay["context"] += chr(0x1F6AB)
-  parsed = AuditInput.from_json(json.dumps(replay, ensure_ascii=True))
+  parsed = VerificationCase.from_json(json.dumps(replay, ensure_ascii=True))
   assert parsed.context == replay["context"]
 
 
@@ -137,4 +137,4 @@ def test_protocol_text_is_not_observed_procedural_evidence() -> None:
     }
   ]
   with pytest.raises(ValidationError, match="invalid evidence source"):
-    AuditInput.parse(replay)
+    VerificationCase.parse(replay)

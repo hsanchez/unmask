@@ -2,9 +2,12 @@
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass, field
 from enum import StrEnum
 from time import monotonic
+from types import MappingProxyType
 from typing import NotRequired, TypedDict, cast
 
 import z3
@@ -45,6 +48,11 @@ class Truth(StrEnum):
 def require(ok: bool, message: str) -> None:
   if not ok:
     raise ValidationError(message)
+
+
+def _require_instance(value: object, expected: type[object]) -> None:
+  if not isinstance(value, expected):
+    raise ValidationError(f"expected {expected.__name__}")
 
 
 def validate_object(
@@ -91,6 +99,13 @@ class Expr:
   atom: str | None = None
   value: bool | None = None
 
+  def to_dict(self) -> dict[str, object]:
+    if self.op == "atom":
+      return {"atom": self.atom}
+    if self.op == "const":
+      return {"const": self.value}
+    return {"op": self.op, "args": [child.to_dict() for child in self.args]}
+
   def referenced_atoms(self) -> set[str]:
     if self.atom is not None:
       return {self.atom}
@@ -108,30 +123,50 @@ class Expr:
       budget[0] <= MAX_NODES and depth <= MAX_DEPTH,
       "expression resource limit exceeded",
     )
-    if not isinstance(value, dict):
-      raise ValidationError("expression must be object")
-    data = cast("dict[str, object]", value)
-    if "atom" in data:
-      _ = validate_object(data, {"atom"})
-      atom = data["atom"]
+    expression = value if isinstance(value, Expr) else None
+    if expression is not None:
+      _require_instance(expression.args, tuple)
+      for child in expression.args:
+        _require_instance(child, Expr)
+      op: object = expression.op
+      args: tuple[Expr, ...] | list[object] = expression.args
+      atom: object = expression.atom
+      constant: object = expression.value
+    else:
+      if not isinstance(value, dict):
+        raise ValidationError("expression must be object")
+      data = cast("dict[str, object]", value)
+      atom = None
+      constant = None
+      args = ()
+      if "atom" in data:
+        _ = validate_object(data, {"atom"})
+        op, atom = "atom", data["atom"]
+      elif "const" in data:
+        _ = validate_object(data, {"const"})
+        op, constant = "const", data["const"]
+      else:
+        _ = validate_object(data, {"op", "args"})
+        op = data["op"]
+        args = validate_items(data["args"])
+    if op == "atom":
+      require(not args and constant is None, "invalid atom expression")
       if not isinstance(atom, str) or atom not in atoms:
         raise ValidationError("undeclared atom")
-      return cls("atom", atom=atom)
-    if "const" in data:
-      _ = validate_object(data, {"const"})
-      constant = data["const"]
+      return expression if expression is not None else cls("atom", atom=atom)
+    if op == "const":
+      require(not args and atom is None, "invalid constant expression")
       if type(constant) is not bool:
         raise ValidationError("const must be Boolean")
-      return cls("const", value=constant)
-    _ = validate_object(data, {"op", "args"})
-    op = data["op"]
+      return expression if expression is not None else cls("const", value=constant)
+    require(atom is None and constant is None, "invalid operator expression")
     if not isinstance(op, str):
       raise ValidationError("unsupported operator")
     require(
       op in {"and", "or", "not", "implies", "iff"},
       "unsupported operator",
     )
-    args = validate_items(data["args"])
+    require(len(args) <= MAX_ATOMS, f"expected at most {MAX_ATOMS} arguments")
     require(
       op in {"and", "or"}
       and len(args) >= 1
@@ -139,6 +174,10 @@ class Expr:
       or (op in {"implies", "iff"} and len(args) == 2),
       "invalid operator arity",
     )
+    if expression is not None:
+      for argument in args:
+        _ = cls.parse(argument, atoms, budget, depth + 1)
+      return expression
     return cls(
       op,
       tuple(cls.parse(atom_entry, atoms, budget, depth + 1) for atom_entry in args),
@@ -165,7 +204,7 @@ class Evidence:
 
 
 @dataclass(frozen=True)
-class Finding:
+class Annotation:
   """A supplied annotation and its observable evidence."""
 
   atom: str
@@ -175,7 +214,7 @@ class Finding:
 
 
 @dataclass(frozen=True)
-class Rule:
+class ProtocolRule:
   """A protocol constraint or obligation with optional coverage."""
 
   id: str
@@ -184,32 +223,218 @@ class Rule:
   addressed: Expr | None = None
 
 
-@dataclass(frozen=True)
-class AuditInput:
-  """A replay separating protocol, judge observations, grounding and gold."""
+@dataclass(frozen=True, kw_only=True)
+class VerificationCase:
+  """A validated replay separating protocol, observations, grounding and gold.
+
+  Raises:
+    ValidationError: if fields, expressions, resource bounds, or evidence are invalid.
+  """
 
   id: str
   context: str
   response: str
   rationale: str
   verdict: str
-  gold_verdict: str | None
+  gold_verdict: str | None = None
   protocol_text: str
   atoms: tuple[Atom, ...]
   decision: Expr
-  constraints: tuple[Rule, ...]
-  requirements: tuple[Rule, ...]
-  findings: tuple[Finding, ...]
-  grounding_pairs: tuple[tuple[str, str], ...]
-  extraction: dict[str, str]
+  constraints: tuple[ProtocolRule, ...] = ()
+  requirements: tuple[ProtocolRule, ...] = ()
+  annotations: tuple[Annotation, ...]
+  grounding_pairs: tuple[tuple[str, str], ...] = ()
+  extraction: Mapping[str, str]
+  _payload: dict[str, object] | None = field(
+    default=None, init=False, repr=False, compare=False
+  )
+
+  def to_dict(self) -> dict[str, object]:
+    """Return replay JSON data, preserving the original validated payload."""
+    if self._payload is not None:
+      return deepcopy(self._payload)
+    return {
+      "schema_version": AUDIT_SCHEMA_VERSION,
+      "id": self.id,
+      "context": self.context,
+      "response": self.response,
+      "rationale": self.rationale,
+      "verdict": self.verdict,
+      "gold_verdict": self.gold_verdict,
+      "protocol": {
+        "text": self.protocol_text,
+        "atoms": [
+          {"id": atom.id, "role": atom.role, "description": atom.description}
+          for atom in self.atoms
+        ],
+        "decision": self.decision.to_dict(),
+        **{
+          key: [
+            {
+              "id": rule.id,
+              "description": rule.description,
+              "expr": rule.expr.to_dict(),
+              **(
+                {"addressed": rule.addressed.to_dict()}
+                if rule.addressed is not None
+                else {}
+              ),
+            }
+            for rule in rules
+          ]
+          for key, rules in (
+            ("constraints", self.constraints),
+            ("requirements", self.requirements),
+          )
+        },
+      },
+      "findings": [
+        {
+          "atom": finding.atom,
+          "value": finding.value.value,
+          "explanation": finding.explanation,
+          "evidence": [
+            {
+              "source": evidence.source,
+              "start": evidence.start,
+              "end": evidence.end,
+              "quote": evidence.quote,
+            }
+            for evidence in finding.evidence
+          ],
+        }
+        for finding in self.annotations
+      ],
+      "grounding_pairs": [list(pair) for pair in self.grounding_pairs],
+      "extraction": dict(self.extraction),
+    }
+
+  def __post_init__(self) -> None:
+    for text in (
+      self.id,
+      self.context,
+      self.response,
+      self.rationale,
+      self.protocol_text,
+    ):
+      _ = require_text(text)
+    require(self.verdict in ("PASS", "FAIL"), "verdict must be PASS or FAIL")
+    require(self.gold_verdict in (None, "PASS", "FAIL"), "invalid gold verdict")
+    for values, limit in (
+      (self.atoms, MAX_ATOMS),
+      (self.constraints, MAX_ATOMS),
+      (self.requirements, MAX_ATOMS),
+      (self.annotations, MAX_ATOMS * 2),
+      (self.grounding_pairs, MAX_ATOMS),
+    ):
+      _require_instance(values, tuple)
+      require(len(values) <= limit, f"expected tuple with at most {limit} items")
+    require(bool(self.atoms), "declare at least one atom")
+    for atom in self.atoms:
+      _require_instance(atom, Atom)
+      require(
+        re.fullmatch("[A-Za-z][A-Za-z0-9_]{0,63}", require_text(atom.id)) is not None,
+        "invalid atom id",
+      )
+      require(atom.role in ("judge", "context", "procedure"), "invalid atom role")
+      _ = require_text(atom.description)
+    names = {atom.id for atom in self.atoms}
+    require(len(names) == len(self.atoms), "duplicate atom id")
+    roles = {atom.id: atom.role for atom in self.atoms}
+    budget = [0]
+    _require_instance(self.decision, Expr)
+    _ = Expr.parse(self.decision, names, budget)
+    require(
+      all(roles[name] != "context" for name in self.decision.referenced_atoms()),
+      "decision may use judge/procedure findings, not independent context assessments",
+    )
+    seen_rules: set[str] = set()
+    for rule in (*self.constraints, *self.requirements):
+      _require_instance(rule, ProtocolRule)
+      _ = require_text(rule.id)
+      _ = require_text(rule.description)
+      require(rule.id not in seen_rules, "duplicate rule id")
+      seen_rules.add(rule.id)
+      _require_instance(rule.expr, Expr)
+      _ = Expr.parse(rule.expr, names, budget)
+      if rule in self.constraints:
+        require(rule.addressed is None, "constraints cannot define coverage")
+        require(
+          all(roles[name] != "context" for name in rule.expr.referenced_atoms()),
+          "protocol constraints cannot bind independent context assessments",
+        )
+      if rule.addressed is not None:
+        _require_instance(rule.addressed, Expr)
+        _ = Expr.parse(rule.addressed, names, budget)
+    sources = {
+      "context": self.context,
+      "response": self.response,
+      "rationale": self.rationale,
+    }
+    for finding in self.annotations:
+      _require_instance(finding, Annotation)
+      require(require_text(finding.atom) in names, "finding refers to undeclared atom")
+      _require_instance(finding.value, Truth)
+      _ = require_text(finding.explanation)
+      _require_instance(finding.evidence, tuple)
+      require(len(finding.evidence) <= 16, "expected at most 16 evidence spans")
+      require(
+        finding.value == Truth.UNKNOWN or bool(finding.evidence),
+        "known findings require evidence",
+      )
+      for evidence in finding.evidence:
+        _require_instance(evidence, Evidence)
+        _ = require_text(evidence.source)
+        require(evidence.source in sources, "invalid evidence source")
+        require(
+          type(evidence.start) is int and type(evidence.end) is int,
+          "evidence offsets must be integers",
+        )
+        require(
+          0 <= evidence.start < evidence.end <= len(sources[evidence.source]),
+          "evidence offsets out of bounds",
+        )
+        require(
+          sources[evidence.source][evidence.start : evidence.end] == evidence.quote,
+          "evidence quote mismatch",
+        )
+        expected = (
+          {"context", "response"} if roles[finding.atom] == "context" else {"rationale"}
+        )
+        require(
+          evidence.source in expected, "evidence source incompatible with atom role"
+        )
+    for pair in self.grounding_pairs:
+      _require_instance(pair, tuple)
+      require(
+        len(pair) == 2 and all(require_text(name) in roles for name in pair),
+        "invalid grounding pair",
+      )
+      require(
+        roles[pair[0]] == "judge" and roles[pair[1]] == "context",
+        "grounding pairs must be judge/context",
+      )
+    _require_instance(self.extraction, Mapping)
+    extraction = validate_object(
+      dict(self.extraction), {"provider", "translation_status"}, {"notes"}
+    )
+    for value in extraction.values():
+      _ = require_text(value)
+    require(
+      extraction["translation_status"] in ("VALID", "INVALID", "UNKNOWN"),
+      "invalid translation status",
+    )
+    object.__setattr__(self, "extraction", MappingProxyType(dict(self.extraction)))
 
   @classmethod
-  def from_json(cls, text: str) -> AuditInput:
+  def from_json(cls, text: str) -> VerificationCase:
     """Parse replay JSON with bounded resources and unique keys.
 
     Raises:
       ValidationError: if JSON, resource bounds or evidence are invalid.
     """
+    if not isinstance(cast("object", text), str):
+      raise ValidationError("JSON input must be a string")
     try:
       byte_count = len(text.encode("utf-8"))
     except UnicodeEncodeError as exc:
@@ -236,7 +461,7 @@ class AuditInput:
       raise ValidationError(f"invalid JSON: {exc}") from exc
 
   @classmethod
-  def parse(cls, data: object) -> AuditInput:
+  def parse(cls, data: object) -> VerificationCase:
     """Validate a decoded replay without interpreting natural language.
 
     Raises:
@@ -266,41 +491,25 @@ class AuditInput:
     response = require_text(data["response"])
     rationale = require_text(data["rationale"])
     verdict = require_text(data["verdict"])
-    require(verdict in ("PASS", "FAIL"), "verdict must be PASS or FAIL")
     raw_gold = data.get("gold_verdict")
-    require(raw_gold in (None, "PASS", "FAIL"), "invalid gold verdict")
     gold_verdict = require_text(raw_gold) if raw_gold is not None else None
     protocol = validate_object(
       data["protocol"], {"text", "atoms", "decision", "constraints", "requirements"}
     )
     protocol_text = require_text(protocol["text"])
     atom_entries = validate_items(protocol["atoms"])
-    require(bool(atom_entries), "declare at least one atom")
     atoms: list[Atom] = []
     for raw_atom in atom_entries:
       atom_entry = validate_object(raw_atom, {"id", "role", "description"})
       atom_id = require_text(atom_entry["id"])
-      require(
-        re.fullmatch("[A-Za-z][A-Za-z0-9_]{0,63}", atom_id) is not None,
-        "invalid atom id",
-      )
       role = require_text(atom_entry["role"])
-      require(role in ("judge", "context", "procedure"), "invalid atom role")
       atoms.append(Atom(atom_id, role, require_text(atom_entry["description"])))
     names = {atom_entry.id for atom_entry in atoms}
-    require(len(names) == len(atoms), "duplicate atom id")
-    roles = {atom_entry.id: atom_entry.role for atom_entry in atoms}
     budget = [0]
     decision = Expr.parse(protocol["decision"], names, budget)
 
-    require(
-      all(roles[name] != "context" for name in decision.referenced_atoms()),
-      "decision may use judge/procedure findings, not independent context assessments",
-    )
-    seen_rules: set[str] = set()
-
-    def parse_rules(key: str) -> tuple[Rule, ...]:
-      result: list[Rule] = []
+    def parse_rules(key: str) -> tuple[ProtocolRule, ...]:
+      result: list[ProtocolRule] = []
       for raw_rule in validate_items(protocol[key]):
         rule_entry = validate_object(
           raw_rule,
@@ -309,38 +518,25 @@ class AuditInput:
         )
         rule_id = require_text(rule_entry["id"])
         description = require_text(rule_entry["description"])
-        require(rule_id not in seen_rules, "duplicate rule id")
-        seen_rules.add(rule_id)
         expression = Expr.parse(rule_entry["expr"], names, budget)
-        if key == "constraints":
-          require(
-            all(roles[name] != "context" for name in expression.referenced_atoms()),
-            "protocol constraints cannot bind independent context assessments",
-          )
         addressed = (
           Expr.parse(rule_entry["addressed"], names, budget)
           if "addressed" in rule_entry
           else None
         )
-        result.append(Rule(rule_id, description, expression, addressed))
+        result.append(ProtocolRule(rule_id, description, expression, addressed))
       return tuple(result)
 
     constraints, requirements = (
       parse_rules("constraints"),
       parse_rules("requirements"),
     )
-    findings: list[Finding] = []
-    sources = {
-      "context": context,
-      "response": response,
-      "rationale": rationale,
-    }
+    findings: list[Annotation] = []
     for raw_finding in validate_items(data["findings"], MAX_ATOMS * 2):
       finding_entry = validate_object(
         raw_finding, {"atom", "value", "evidence", "explanation"}
       )
       atom = require_text(finding_entry["atom"])
-      require(atom in names, "finding refers to undeclared atom")
       truth = require_text(finding_entry["value"])
       require(truth in ("TRUE", "FALSE", "UNKNOWN"), "invalid truth value")
       explanation = require_text(finding_entry["explanation"])
@@ -350,43 +546,22 @@ class AuditInput:
           raw_evidence, {"source", "start", "end", "quote"}
         )
         source = require_text(evidence_data["source"])
-        require(source in sources, "invalid evidence source")
         start, end = evidence_data["start"], evidence_data["end"]
         if type(start) is not int or type(end) is not int:
           raise ValidationError("evidence offsets must be integers")
-        require(
-          0 <= start < end <= len(sources[source]),
-          "evidence offsets out of bounds",
-        )
         quote = evidence_data["quote"]
-        if not isinstance(quote, str) or sources[source][start:end] != quote:
-          raise ValidationError("evidence quote mismatch")
-        expected = (
-          {"context", "response"} if roles[atom] == "context" else {"rationale"}
-        )
-        require(
-          source in expected,
-          "evidence source incompatible with atom role",
-        )
+        if not isinstance(quote, str):
+          raise ValidationError("evidence quote must be text")
         evidence.append(Evidence(source, start, end, quote))
-      require(
-        truth == "UNKNOWN" or bool(evidence),
-        "known findings require evidence",
-      )
-      findings.append(Finding(atom, Truth(truth), tuple(evidence), explanation))
+      findings.append(Annotation(atom, Truth(truth), tuple(evidence), explanation))
     pairs: list[tuple[str, str]] = []
     for raw_pair in validate_items(data.get("grounding_pairs", [])):
       pair = validate_items(raw_pair, 2)
       require(
-        len(pair) == 2
-        and all(isinstance(name, str) and name in roles for name in pair),
+        len(pair) == 2 and all(isinstance(name, str) for name in pair),
         "invalid grounding pair",
       )
       judge_atom, context_atom = require_text(pair[0]), require_text(pair[1])
-      require(
-        roles[judge_atom] == "judge" and roles[context_atom] == "context",
-        "grounding pairs must be judge/context",
-      )
       pairs.append((judge_atom, context_atom))
     extraction_data = validate_object(
       data["extraction"], {"provider", "translation_status"}, {"notes"}
@@ -395,28 +570,26 @@ class AuditInput:
       "provider": require_text(extraction_data["provider"]),
       "translation_status": require_text(extraction_data["translation_status"]),
     }
-    require(
-      extraction["translation_status"] in ("VALID", "INVALID", "UNKNOWN"),
-      "invalid translation status",
-    )
     if "notes" in extraction_data:
       extraction["notes"] = require_text(extraction_data["notes"])
-    return cls(
-      identifier,
-      context,
-      response,
-      rationale,
-      verdict,
-      gold_verdict,
-      protocol_text,
-      tuple(atoms),
-      decision,
-      constraints,
-      requirements,
-      tuple(findings),
-      tuple(pairs),
-      extraction,
+    case = cls(
+      id=identifier,
+      context=context,
+      response=response,
+      rationale=rationale,
+      verdict=verdict,
+      gold_verdict=gold_verdict,
+      protocol_text=protocol_text,
+      atoms=tuple(atoms),
+      decision=decision,
+      constraints=constraints,
+      requirements=requirements,
+      annotations=tuple(findings),
+      grounding_pairs=tuple(pairs),
+      extraction=extraction,
     )
+    object.__setattr__(case, "_payload", deepcopy(data))
+    return case
 
 
 def compile_expr(
@@ -554,7 +727,7 @@ def aggregate(statuses: list[str]) -> str:
   return "UNKNOWN"
 
 
-def audit(case: AuditInput, timeout_ms: int = 1000) -> AuditReport:
+def audit(case: VerificationCase, timeout_ms: int = 1000) -> AuditReport:
   """Audit a validated replay within per-query and total solver budgets.
 
   Raises:
@@ -567,7 +740,7 @@ def audit(case: AuditInput, timeout_ms: int = 1000) -> AuditReport:
     "schema_version": 1,
     "id": case.id,
     "scope": "Observable evaluation only; conditional on supplied protocol translation and semantic findings.",
-    "extraction": case.extraction,
+    "extraction": dict(case.extraction),
     "observed_verdict": case.verdict,
     "gold_verdict": case.gold_verdict,
     "verdict_correct": None
@@ -588,7 +761,7 @@ def audit(case: AuditInput, timeout_ms: int = 1000) -> AuditReport:
         ],
         "explanation": finding.explanation,
       }
-      for finding in case.findings
+      for finding in case.annotations
     ],
     "status": "TRANSLATION_INVALID"
     if case.extraction["translation_status"] == "INVALID"
@@ -626,7 +799,7 @@ def audit(case: AuditInput, timeout_ms: int = 1000) -> AuditReport:
         )
       ),
     )
-    for index, finding_entry in enumerate(case.findings)
+    for index, finding_entry in enumerate(case.annotations)
     if finding_entry.value != Truth.UNKNOWN
   ]
   # Facts-only queries keep direct evidence independent of inconsistent protocol rules.
@@ -713,7 +886,7 @@ def audit(case: AuditInput, timeout_ms: int = 1000) -> AuditReport:
     violations.append({"kind": "rationale_verdict_mismatch", "id": "verdict"})
   known = {
     finding_entry.atom
-    for finding_entry in case.findings
+    for finding_entry in case.annotations
     if finding_entry.value != Truth.UNKNOWN
   }
   expected_verdict: str | None = None
@@ -775,19 +948,88 @@ def audit(case: AuditInput, timeout_ms: int = 1000) -> AuditReport:
   }
 
 
-class AuditCheck(TypedDict):
-  """A source-linked check rendered by the audit workspace."""
+@dataclass(frozen=True)
+class VerificationCheck:
+  """A protocol query with its status, proof, and evidence references."""
 
   id: str
   dimension: str
   summary: str
   status: str
   proof: QueryResult
-  atoms: list[str]
-  sourceReferences: list[dict[str, object]]
+  atoms: tuple[str, ...]
+  source_references: tuple[dict[str, object], ...]
+
+  def to_dict(self) -> dict[str, object]:
+    return {
+      "id": self.id,
+      "dimension": self.dimension,
+      "summary": self.summary,
+      "status": self.status,
+      "proof": self.proof,
+      "atoms": list(self.atoms),
+      "sourceReferences": list(self.source_references),
+    }
 
 
-def _documents(case: AuditInput) -> list[dict[str, object]]:
+@dataclass(frozen=True)
+class VerificationFinding:
+  """A detected violation or inconsistency, distinct from supplied annotations."""
+
+  id: str
+  kind: str
+  summary: str
+  check: VerificationCheck | None = None
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+  """Verification conclusions conditional on the supplied interpretation."""
+
+  report: AuditReport
+  checks: tuple[VerificationCheck, ...]
+
+  @property
+  def status(self) -> str:
+    return self.report["status"]
+
+  @property
+  def overall(self) -> str:
+    return self.report["protocol_adherent"]
+
+  @property
+  def annotations(self) -> tuple[FindingReport, ...]:
+    return tuple(self.report["findings"])
+
+  @property
+  def findings(self) -> tuple[VerificationFinding, ...]:
+    findings = tuple(
+      VerificationFinding(check.id, check.dimension, check.summary, check)
+      for check in self.checks
+      if check.status == "REFUTED"
+    )
+    if self.status.startswith("INCONSISTENT_"):
+      return (
+        *findings,
+        VerificationFinding(
+          "inputs", self.status.lower(), self.status.replace("_", " ").capitalize()
+        ),
+      )
+    return findings
+
+  @property
+  def limitations(self) -> tuple[str, ...]:
+    return (
+      self.report["scope"],
+      "Evidence spans validate quotations, not semantic interpretation. Translation validity is supplied by the annotator.",
+      "Missing observable coverage does not establish what happened in hidden reasoning.",
+      self.report.get(
+        "witness_note", "No solver conclusions are available for this translation."
+      ),
+    )
+
+
+def _documents(case: VerificationCase) -> list[dict[str, object]]:
   return [
     SourceDocument(
       id=role,
@@ -806,10 +1048,9 @@ def _documents(case: AuditInput) -> list[dict[str, object]]:
   ]
 
 
-def _envelope(case: AuditInput, text: str) -> dict[str, object]:
-  # Bind the original payload already checked by AuditInput.from_json, not a reconstruction.
-  payload = cast("object", json.loads(text))
-  binding = {
+def _envelope(case: VerificationCase) -> dict[str, object]:
+  payload = case.to_dict()
+  binding: dict[str, object] = {
     "case": payload,
     "auditorVersion": AUDITOR_VERSION,
     "schemaVersion": AUDIT_SCHEMA_VERSION,
@@ -825,36 +1066,38 @@ def _envelope(case: AuditInput, text: str) -> dict[str, object]:
   }
 
 
-def validate_audit_case(text: str) -> dict[str, object]:
+def validate_audit_case(text: str | VerificationCase) -> dict[str, object]:
   """Validate replay annotations and evidence without making model calls.
 
   Raises:
     ValueError: if the case fails bounded IR or evidence validation.
   """
-  case = AuditInput.from_json(text)
-  return _envelope(case, text)
+  case = VerificationCase.from_json(text) if isinstance(text, str) else text
+  _require_instance(case, VerificationCase)
+  return _envelope(case)
 
 
-def audit_judge_case(text: str) -> dict[str, object]:
-  """Audit a replay and preserve the core report alongside UI checks.
+def adherence(case: VerificationCase, *, timeout_ms: int = 1000) -> VerificationResult:
+  """Assess annotated protocol adherence without calling a model provider.
 
   Raises:
-    ValueError: if the case fails bounded IR or evidence validation.
+    TypeError: if case is not a VerificationCase.
+    ValidationError: if the solver timeout is outside the supported range.
     RuntimeError: if the solver cannot execute the audit.
   """
-  case = AuditInput.from_json(text)
+  if not isinstance(cast("object", case), VerificationCase):
+    raise TypeError("adherence requires a VerificationCase")
   try:
-    report = audit(case)
+    report = audit(case, timeout_ms)
   except z3.Z3Exception as exc:
     raise RuntimeError("judge audit solver failed") from exc
-  result = _envelope(case, text)
-  checks: list[AuditCheck] = []
+  checks: list[VerificationCheck] = []
 
   def add_check(
     identifier: str, dimension: str, title: str, proof: QueryResult, atoms: set[str]
   ) -> None:
     references: list[dict[str, object]] = []
-    for index, finding in enumerate(case.findings):
+    for index, finding in enumerate(case.annotations):
       if finding.atom not in atoms:
         continue
       for evidence in finding.evidence:
@@ -868,15 +1111,15 @@ def audit_judge_case(text: str) -> dict[str, object]:
           }
         )
     checks.append(
-      {
-        "id": identifier,
-        "dimension": dimension,
-        "summary": title,
-        "status": proof["status"],
-        "proof": proof,
-        "atoms": sorted(atoms),
-        "sourceReferences": references,
-      }
+      VerificationCheck(
+        identifier,
+        dimension,
+        title,
+        proof["status"],
+        proof,
+        tuple(sorted(atoms)),
+        tuple(references),
+      )
     )
 
   for requirement, evaluation in zip(
@@ -917,12 +1160,28 @@ def audit_judge_case(text: str) -> dict[str, object]:
       verdict,
       verdict_atoms,
     )
+  return VerificationResult(report, tuple(checks))
+
+
+def audit_judge_case(text: str | VerificationCase) -> dict[str, object]:
+  """Adapt the shared verification result to the existing studio wire format.
+
+  Raises:
+    ValueError: if the case fails bounded IR or evidence validation.
+    RuntimeError: if the solver cannot execute the audit.
+  """
+  case = VerificationCase.from_json(text) if isinstance(text, str) else text
+  verification = adherence(case)
+  report = verification.report
+  checks = [check.to_dict() for check in verification.checks]
+  verdict = report.get("rationale_verdict")
+  result = _envelope(case)
   unknown = [
     atom.id
     for atom in case.atoms
     if not any(
       finding.atom == atom.id and finding.value != "UNKNOWN"
-      for finding in case.findings
+      for finding in case.annotations
     )
   ]
   result.update(
@@ -934,7 +1193,7 @@ def audit_judge_case(text: str) -> dict[str, object]:
         "status": report["status"],
         "overall": report["protocol_adherent"],
         "coverage": aggregate(
-          [item["status"] for item in checks if item["dimension"] == "coverage"]
+          [item.status for item in verification.checks if item.dimension == "coverage"]
         ),
         "procedure": report["procedural_adherence"],
         "grounding": report.get("grounding_correctness", "UNKNOWN"),
@@ -950,14 +1209,7 @@ def audit_judge_case(text: str) -> dict[str, object]:
         {"id": f"finding:{index}:{finding['atom']}", **finding}
         for index, finding in enumerate(report["findings"])
       ],
-      "limitations": [
-        report["scope"],
-        "Evidence spans validate quotations, not semantic interpretation. Translation validity is supplied by the annotator.",
-        "Missing observable coverage does not establish what happened in hidden reasoning.",
-        report.get(
-          "witness_note", "No solver conclusions are available for this translation."
-        ),
-      ],
+      "limitations": list(verification.limitations),
     }
   )
   return result

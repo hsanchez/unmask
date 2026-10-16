@@ -11,8 +11,8 @@ import z3
 
 from unmask.cli import main
 from unmask.judge import (
-  AuditInput,
   ValidationError,
+  VerificationCase,
   audit_judge_case,
   validate_audit_case,
 )
@@ -219,7 +219,7 @@ def test_api_example_validates_without_provider(monkeypatch) -> None:
 )
 def test_json_boundary_rejects_invalid_inputs(text) -> None:
   with pytest.raises(ValidationError):
-    AuditInput.from_json(text)
+    VerificationCase.from_json(text)
 
 
 def test_invalid_api_shape_is_structured_error() -> None:

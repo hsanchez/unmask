@@ -16,7 +16,7 @@ from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
 from .analyzer import SymbolicAnalyzer
 from .backend import JudgeBackend, JudgeResponse, create_backend
-from .config import TargetConfig, load_guardrail_text
+from .config import TargetConfig, guardrail_from_data, load_guardrail_text
 from .diagnosis import (
   ConversationIncident,
   DiagnosisConfig,
@@ -104,8 +104,8 @@ class SourceReference:
 
 
 @dataclass(frozen=True)
-class UiFinding:
-  """A finding normalized for bidirectional source navigation."""
+class BugFinding:
+  """A detected defect with its rationale, witness, and source references."""
 
   id: str
   bug_type: str
@@ -138,6 +138,7 @@ class ValidationResult:
   specification_kind: SpecificationKind
   name: str
   document: SourceDocument
+  specification: Guardrail | RegexManifest
 
   def to_dict(self) -> dict[str, object]:
     return {
@@ -157,7 +158,7 @@ class ScanResult:
   content_hash: str
   document: SourceDocument
   summary: dict[str, object]
-  findings: tuple[UiFinding, ...]
+  findings: tuple[BugFinding, ...]
   workflow: AnalysisWorkflow = "scan"
   symbolic_model: SymbolicModel | None = None
   regex_report: RegexScanReport | None = None
@@ -267,7 +268,10 @@ def classify_specification(text: str) -> SpecificationKind:
     ValueError: if the document is not a supported specification.
     yaml.YAMLError: if `text` is malformed YAML.
   """
-  loaded: object = cast("object", yaml.safe_load(text))
+  return _specification_kind(cast("object", yaml.safe_load(text)))
+
+
+def _specification_kind(loaded: object) -> SpecificationKind:
   if not isinstance(loaded, dict):
     raise TypeError("specification must be a YAML mapping")
   raw: dict[object, object] = cast("dict[object, object]", loaded)
@@ -296,19 +300,19 @@ def validate_specification(
     ValueError: if the specification has invalid values.
     yaml.YAMLError: if the specification is malformed YAML.
   """
-  kind: SpecificationKind = classify_specification(text)
+  loaded: object = cast("object", yaml.safe_load(text))
+  kind: SpecificationKind = _specification_kind(loaded)
   root: MappingNode = _composed_mapping(text)
   if kind == "natural_language":
-    guardrail: Guardrail = load_guardrail_text(text)
-    specification_name: str = guardrail.name
+    specification: Guardrail | RegexManifest = guardrail_from_data(loaded)
     units: tuple[StructuralUnit, ...] = _natural_units(root)
   else:
-    manifest: RegexManifest = RegexManifest.from_text(text)
-    specification_name = manifest.name
+    specification = RegexManifest.from_dict(loaded)
     units = _regex_units(root)
   return ValidationResult(
     specification_kind=kind,
-    name=specification_name,
+    name=specification.name,
+    specification=specification,
     document=SourceDocument(
       id="specification",
       role="specification",
@@ -337,8 +341,8 @@ def _references(
   )
 
 
-def _natural_finding(finding: Finding, document: SourceDocument) -> UiFinding:
-  return UiFinding(
+def _natural_finding(finding: Finding, document: SourceDocument) -> BugFinding:
+  return BugFinding(
     id=finding.id,
     bug_type=finding.bug_type,
     severity=finding.severity,
@@ -357,8 +361,8 @@ def _regex_finding(
   case_index: int,
   example_content: str,
   document: SourceDocument,
-) -> UiFinding:
-  return UiFinding(
+) -> BugFinding:
+  return BugFinding(
     id=f"case:{case_index}:{finding.id}",
     bug_type=finding.bug_type,
     severity=finding.severity,
@@ -379,15 +383,15 @@ def _regex_finding(
   )
 
 
-def scan_specification(
+def bugs(
   specification_text: str,
   *,
   specification_name: str = "specification.yaml",
   taxonomy_text: str | None = None,
-  target: TargetConfig,
+  model: TargetConfig | None = None,
   backend_factory: BackendFactory = create_backend,
 ) -> ScanResult:
-  """Run a supported specification scan entirely from in-memory text.
+  """Find specification defects; only natural-language analysis needs a model.
 
   Raises:
     RuntimeError: if a configured model provider cannot execute.
@@ -395,6 +399,8 @@ def scan_specification(
     ValueError: if an input document or extracted model is invalid.
     yaml.YAMLError: if an input is malformed YAML.
   """
+  if model is not None and not isinstance(cast("object", model), TargetConfig):
+    raise TypeError("model must be a TargetConfig")
   validation: ValidationResult = validate_specification(
     specification_text, name=specification_name
   )
@@ -403,26 +409,26 @@ def scan_specification(
     "specification": specification_text,
     "taxonomy": taxonomy_text,
   }
-  if validation.specification_kind == "natural_language":
+  if isinstance(validation.specification, Guardrail):
+    if model is None:
+      raise ValueError("natural-language analysis requires model configuration")
     binding.update(
       {
-        "provider": target.provider,
-        "model": target.judge_model,
-        "thinkingBudget": target.thinking_budget,
+        "provider": model.provider,
+        "model": model.judge_model,
+        "thinkingBudget": model.thinking_budget,
       }
     )
-  content_hash: str = canonical_json_hash(binding)
-  if validation.specification_kind == "natural_language":
-    guardrail: Guardrail = load_guardrail_text(specification_text)
+    guardrail = validation.specification
     taxonomy: object | None = (
       cast("object", yaml.safe_load(taxonomy_text))
       if taxonomy_text is not None
       else None
     )
-    model: SymbolicModel = SemanticExtractor(backend_factory(target)).extract(
+    symbolic_model: SymbolicModel = SemanticExtractor(backend_factory(model)).extract(
       guardrail, taxonomy
     )
-    findings: list[Finding] = SymbolicAnalyzer(model, guardrail).analyze()
+    findings: list[Finding] = SymbolicAnalyzer(symbolic_model, guardrail).analyze()
     counts: dict[str, int] = {
       bug_type: sum(finding.bug_type == bug_type for finding in findings)
       for bug_type in ("over_strict", "contradiction", "ambiguity")
@@ -430,7 +436,7 @@ def scan_specification(
     return ScanResult(
       specification_kind="natural_language",
       name=guardrail.name,
-      content_hash=content_hash,
+      content_hash=canonical_json_hash(binding),
       document=validation.document,
       summary={
         "status": "supported_defect" if findings else "no_supported_defect",
@@ -441,13 +447,13 @@ def scan_specification(
       findings=tuple(
         _natural_finding(finding, validation.document) for finding in findings
       ),
-      symbolic_model=model,
+      symbolic_model=symbolic_model,
     )
 
-  manifest: RegexManifest = RegexManifest.from_text(specification_text)
+  manifest = validation.specification
   report: RegexScanReport = scan_regex_manifest(manifest, taxonomy_text=taxonomy_text)
   summary = cast("dict[str, object]", report.to_dict()["summary"])
-  regex_findings: tuple[UiFinding, ...] = tuple(
+  regex_findings: tuple[BugFinding, ...] = tuple(
     _regex_finding(
       finding,
       case_index=case.index,
@@ -460,7 +466,7 @@ def scan_specification(
   return ScanResult(
     specification_kind="regex",
     name=manifest.name,
-    content_hash=content_hash,
+    content_hash=canonical_json_hash(binding),
     document=validation.document,
     summary=summary,
     findings=regex_findings,
@@ -503,6 +509,7 @@ def diagnose_specification(
   violations_text: str,
   *,
   specification_name: str = "specification.yaml",
+  source: Path | None = None,
 ) -> ScanResult:
   """Diagnose reported incidents against an in-memory regex specification.
 
@@ -514,14 +521,14 @@ def diagnose_specification(
   validation: ValidationResult = validate_specification(
     specification_text, name=specification_name
   )
-  if validation.specification_kind != "regex":
+  if not isinstance(validation.specification, RegexManifest):
     raise ValueError("diagnosis requires a regex specification")
   violations: tuple[ImportedViolation, ...] = load_violations_text(violations_text)
-  manifest: RegexManifest = RegexManifest.from_text(specification_text)
+  manifest = validation.specification
   output_directory: Path = Path("<memory>")
   configs: tuple[DiagnosisConfig, ...] = tuple(
     DiagnosisConfig(
-      source=Path(specification_name),
+      source=source if source is not None else Path(specification_name),
       name=f"{manifest.name} incident {index}",
       incident=incident_from_violation(violation),
       rules=manifest.rules,
@@ -531,7 +538,7 @@ def diagnose_specification(
     for index, violation in enumerate(violations, start=1)
   )
   reports: tuple[DiagnosisReport, ...] = RegexDiagnoser().diagnose_many(configs)
-  findings: tuple[UiFinding, ...] = tuple(
+  findings: tuple[BugFinding, ...] = tuple(
     _regex_finding(
       finding,
       case_index=index,
@@ -575,7 +582,7 @@ def diagnose_specification(
 
 
 def _finding_fingerprint(
-  finding: UiFinding,
+  finding: BugFinding,
   *,
   specification_kind: SpecificationKind,
   workflow: AnalysisWorkflow,
@@ -824,19 +831,19 @@ def _validate_regex_fix(
   baseline_scan: ScanResult = (
     baseline
     if workflow == "scan"
-    else scan_specification(
+    else bugs(
       specification_text,
       specification_name=specification_name,
       taxonomy_text=taxonomy_text,
-      target=target,
+      model=target,
       backend_factory=backend_factory,
     )
   )
-  revised_scan: ScanResult = scan_specification(
+  revised_scan: ScanResult = bugs(
     revised,
     specification_name=specification_name,
     taxonomy_text=taxonomy_text,
-    target=target,
+    model=target,
     backend_factory=backend_factory,
   )
   revised_result: ScanResult = (
@@ -908,7 +915,7 @@ def _validate_natural_fix(
   baseline: ScanResult,
   revised: str,
   taxonomy_text: str | None,
-  finding: UiFinding,
+  finding: BugFinding,
   fingerprint: FindingFingerprint,
   backend: JudgeBackend,
   trusted_examples: tuple[TrustedPolicyExample, ...],
@@ -1041,17 +1048,17 @@ def propose_fix(
       specification_name=specification_name,
     )
   else:
-    baseline = scan_specification(
+    baseline = bugs(
       specification_text,
       specification_name=specification_name,
       taxonomy_text=taxonomy_text,
-      target=target,
+      model=target,
       backend_factory=observed_backend_factory,
     )
   if baseline.content_hash != expected_content_hash:
     raise LookupError("analysis inputs changed; run the analysis again")
   try:
-    finding: UiFinding = next(
+    finding: BugFinding = next(
       item for item in baseline.findings if item.id == finding_id
     )
   except StopIteration as exc:
