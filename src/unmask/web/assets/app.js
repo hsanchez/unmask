@@ -478,6 +478,7 @@ function runActionLabel(study) {
 }
 
 function matchingCachedRun(study) {
+  if (isAuditStudy(study)) return UnmaskAudit.cached(study, state.capabilities.judgeAudits.auditorVersion);
   const run = study.cachedRun;
   if (!run) return null;
   const workflow = run.workflow || "scan";
@@ -862,8 +863,6 @@ function findingEvidence(finding) {
 function findingCard(finding, run) {
   const card = document.createElement("article");
   card.className = "finding-card";
-  card.tabIndex = 0;
-  card.dataset.findingId = finding.id;
   const top = document.createElement("div");
   top.className = "finding-topline";
   const type = document.createElement("span");
@@ -909,19 +908,11 @@ function findingCard(finding, run) {
   const generate = generateFixAction(finding, run);
   if (generate) footer.append(generate);
   card.append(footer);
-  bindFindingPreview(card, [finding.id]);
-  card.addEventListener("click", () => {
+  bindFindingCard(card, finding.id, () => {
     pinFindings([finding.id]);
     const source = [...document.querySelectorAll(".source-reference")]
       .find((node) => JSON.parse(node.dataset.findingIds).includes(finding.id));
     source?.scrollIntoView({behavior: "smooth", block: "center"});
-  });
-  card.addEventListener("keydown", (event) => {
-    if (event.target !== card) return;
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      card.click();
-    }
   });
   return card;
 }
@@ -982,6 +973,23 @@ function bindFindingPreview(node, findingIds) {
   node.addEventListener("blur", clearPreview);
 }
 
+function bindFindingCard(card, findingId, activate) {
+  const findingIds = Array.isArray(findingId) ? findingId : [findingId];
+  card.tabIndex = 0;
+  card.dataset.findingId = findingIds[0];
+  card.dataset.findingIds = JSON.stringify(findingIds);
+  bindFindingPreview(card, findingIds);
+  card.addEventListener("click", (event) => {
+    if (!event.target.closest?.("button, a, input, summary, details")) activate();
+  });
+  card.addEventListener("keydown", (event) => {
+    if (event.target === card && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      activate();
+    }
+  });
+}
+
 function previewFindings(ids) {
   state.hoveredFindingIds = ids;
   applyHighlights();
@@ -1012,7 +1020,8 @@ function applyHighlights() {
     node.classList.toggle("active", inRange && ids.some((id) => active.has(id)));
   });
   document.querySelectorAll(".finding-card").forEach((node) => {
-    node.classList.toggle("active", active.has(node.dataset.findingId));
+    const ids = node.dataset.findingIds ? JSON.parse(node.dataset.findingIds) : [node.dataset.findingId];
+    node.classList.toggle("active", ids.some(id => active.has(id)));
   });
 }
 
@@ -1157,74 +1166,100 @@ function setWorkflow(workflow) {
   }
 }
 
+function analysisRequest(study) {
+  const workflow = currentWorkflow(study);
+  if (workflow === "audit_judge") {
+    const contentHash = study.validation?.contentHash;
+    if (typeof contentHash !== "string" || !contentHash) {
+      throw new Error("Validate this audit case before running it.");
+    }
+    return {path: "/api/v1/judge-audits", payload: {
+      case: {name: study.auditCaseName, text: study.auditCaseText},
+      contentHash,
+    }};
+  }
+  if (workflow === "diagnose" && !study.incidents) {
+    throw new Error("Attach a violations JSON file, then diagnose.");
+  }
+  const specification = {name: study.specificationName, text: study.specificationText};
+  if (workflow === "diagnose") return {path: "/api/v1/diagnoses", payload: {specification, violations: study.incidents}};
+  const thinkingBudget = Number.parseInt(elements.thinkingBudgetInput.value, 10);
+  if (!Number.isInteger(thinkingBudget) || thinkingBudget < 0) {
+    throw new Error("Volume must be a non-negative integer.");
+  }
+  return {path: "/api/v1/scans", payload: {
+    specification, provider: study.settings.provider, model: study.settings.model, thinkingBudget,
+    ...(study.taxonomy ? {taxonomy: study.taxonomy} : {}),
+  }};
+}
+
+function analysisInputKey(study) {
+  const workflow = currentWorkflow(study);
+  if (workflow === "audit_judge") {
+    return JSON.stringify([study.auditCaseText, study.auditCaseName, study.validation?.contentHash]);
+  }
+  const specification = [workflow, study.specificationText, study.specificationName];
+  if (workflow === "diagnose") return JSON.stringify([...specification, study.incidents]);
+  return JSON.stringify([...specification, study.settings.provider, study.settings.model,
+    study.taxonomy, elements.thinkingBudgetInput.value]);
+}
+
 async function analyzeActiveStudy() {
   const study = state.activeStudy;
   if (!study) return;
-  if (isAuditStudy(study)) { await runAuditStudy(study); return; }
   if (state.scanController) {
     state.scanController.abort();
     return;
   }
+  let request;
+  try {
+    request = analysisRequest(study);
+  } catch (error) {
+    setNotice(error.message);
+    return;
+  }
   const workflow = currentWorkflow(study);
-  if (workflow === "diagnose" && !study.incidents) {
-    setNotice("Attach a violations JSON file, then diagnose.");
-    return;
-  }
-  const thinkingBudget = Number.parseInt(elements.thinkingBudgetInput.value, 10);
-  if (!Number.isInteger(thinkingBudget) || thinkingBudget < 0) {
-    setNotice("Volume must be a non-negative integer.");
-    return;
-  }
+  const verb = {scan: "Scan", diagnose: "Diagnosis", audit_judge: "Audit"}[workflow];
+  if (workflow === "scan") study.settings.thinkingBudget = request.payload.thinkingBudget;
+  const inputKey = analysisInputKey(study);
   const controller = new AbortController();
   state.scanController = controller;
-  invalidateProposals(study);
-  const studyId = study.id;
+  if (!isAuditStudy(study)) invalidateProposals(study);
+  const ownsRun = () => state.activeStudy === study && state.scanController === controller
+    && analysisInputKey(study) === inputKey;
+  const current = () => ownsRun() && !controller.signal.aborted;
   elements.analyzeButton.textContent = "Cancel";
   setNotice("");
   try {
-    const run = workflow === "diagnose"
-      ? await api("/api/v1/diagnoses", {
-        method: "POST",
-        body: JSON.stringify({
-          specification: {name: study.specificationName, text: study.specificationText},
-          violations: study.incidents,
-        }),
-        signal: controller.signal,
-      })
-      : await api("/api/v1/scans", {
-        method: "POST",
-        body: JSON.stringify({
-          specification: {name: study.specificationName, text: study.specificationText},
-          provider: study.settings.provider,
-          model: study.settings.model,
-          thinkingBudget,
-          ...(study.taxonomy ? {taxonomy: study.taxonomy} : {}),
-        }),
-        signal: controller.signal,
-      });
-    if (state.activeStudy?.id !== studyId || controller.signal.aborted) return;
-    study.settings = {
-      provider: study.settings.provider,
-      model: study.settings.model,
-      workflow,
-      thinkingBudget,
-    };
+    const run = await api(request.path, {
+      method: "POST", body: JSON.stringify(request.payload), signal: controller.signal,
+    });
+    if (!current()) return;
+    if (workflow === "audit_judge" && run.contentHash !== request.payload.contentHash) {
+      throw new Error("Stale audit response discarded.");
+    }
     study.cachedRun = run;
     study.updatedAt = new Date().toISOString();
     if (!study.bundled) await saveStudy(study);
+    if (!current()) return;
     renderActiveStudy();
-    const verb = workflow === "diagnose" ? "Diagnosis" : "Scan";
-    setNotice(`${verb} complete: ${findingCountText(run.findings.length)}.`, "success");
+    const outcome = workflow === "audit_judge"
+      ? `${run.summary.status.replaceAll("_", " ")}. Review each dimension.`
+      : `${findingCountText(run.findings.length)}.`;
+    const persistence = state.storageAvailable ? "" : " Session only: local persistence is unavailable.";
+    setNotice(`${verb} complete: ${outcome}${persistence}`, "success");
   } catch (error) {
+    if (!ownsRun()) return;
     if (error.name === "AbortError") {
-      setNotice(`${workflow === "diagnose" ? "Diagnosis" : "Scan"} cancelled.`);
+      const detail = workflow === "audit_judge" ? " The local solver may finish its bounded checks." : "";
+      setNotice(`${verb} cancelled.${detail}`);
     } else {
       setNotice(error.message);
     }
   } finally {
     if (state.scanController === controller) {
       state.scanController = null;
-      elements.analyzeButton.textContent = runActionLabel(study);
+      if (state.activeStudy === study) elements.analyzeButton.textContent = runActionLabel(study);
     }
   }
 }

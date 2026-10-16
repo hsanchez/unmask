@@ -23,7 +23,7 @@ from .diagnosis import (
   RegexManifest,
 )
 from .importer import ImportedViolation, load_violations
-from .judge_audit.service import audit_judge_case
+from .judge import audit_judge_case
 from .service import (
   DEFAULT_MODELS,
   ScanResult,
@@ -290,8 +290,8 @@ def _build_parser() -> argparse.ArgumentParser:
   audit_parser = subparsers.add_parser(
     "audit-judge", help="audit a structured judge replay locally"
   )
-  audit_parser.add_argument("case", type=Path, help="annotated audit case JSON")
-  audit_parser.add_argument(
+  _ = audit_parser.add_argument("case", type=Path, help="annotated audit case JSON")
+  _ = audit_parser.add_argument(
     "--output", type=Path, help="report JSON file (default: stdout)"
   )
 

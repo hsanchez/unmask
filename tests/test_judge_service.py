@@ -1,5 +1,6 @@
 """Replay contract integration and resource-boundary checks."""
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -9,9 +10,13 @@ import pytest
 import z3
 
 from unmask.cli import main
-from unmask.judge_audit.models import AuditInput, ValidationError
-from unmask.judge_audit.service import audit_judge_case, validate_audit_case
-from unmask.judge_audit.solver import Engine
+from unmask.judge import (
+  AuditInput,
+  ValidationError,
+  audit_judge_case,
+  validate_audit_case,
+)
+from unmask.solver import Engine
 from unmask.webapp import create_app
 
 FIXTURES = Path(__file__).parent / "fixtures/judge_audit"
@@ -19,6 +24,34 @@ FIXTURES = Path(__file__).parent / "fixtures/judge_audit"
 
 def replay(prefix: str = "A_") -> str:
   return next(FIXTURES.glob(f"{prefix}*.json")).read_text(encoding="utf-8")
+
+
+def test_replay_document_and_hash_contract() -> None:
+  text = replay()
+  case = json.loads(text)
+  result = validate_audit_case(text)
+  binding = {"case": case, "auditorVersion": "1", "schemaVersion": 1}
+  expected_hash = hashlib.sha256(
+    json.dumps(binding, sort_keys=True, ensure_ascii=False).encode("utf-8")
+  ).hexdigest()
+  assert result["contentHash"] == expected_hash
+  assert result["documents"] == [
+    {
+      "id": role,
+      "role": role,
+      "name": name,
+      "mediaType": "text/plain",
+      "rawText": raw_text,
+      "structuralUnits": [],
+    }
+    for role, name, raw_text in (
+      ("protocol", "Protocol", case["protocol"]["text"]),
+      ("context", "Context", case["context"]),
+      ("response", "Candidate response", case["response"]),
+      ("rationale", "Judge rationale", case["rationale"]),
+    )
+  ]
+  assert validate_audit_case(json.dumps(case, indent=4))["contentHash"] == expected_hash
 
 
 def test_cli_service_and_api_have_identical_reports(tmp_path, monkeypatch) -> None:
@@ -107,6 +140,60 @@ def test_expired_solver_budget_returns_unknown() -> None:
   engine = Engine([], {"a": z3.Bool("a")}, deadline=monotonic() - 1)
   assert engine.query(z3.Bool("a"))["status"] == "SOLVER_UNKNOWN"
   assert engine.reason == "audit time budget exhausted"
+
+
+def test_expired_solver_budget_emits_query_diagnostics(
+  caplog: pytest.LogCaptureFixture,
+) -> None:
+  _ = Engine([], {"a": z3.Bool("a")}, deadline=monotonic() - 1)
+  record = caplog.records[-1]
+  assert record.__dict__["solver_query"] == "base"
+  assert "audit time budget exhausted" in record.getMessage()
+
+
+def test_unknown_proposition_queries_emit_separate_diagnostics(
+  caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+  symbol = z3.Bool("sensitive_predicate")
+  engine = Engine([], {"sensitive_predicate": symbol})
+  monkeypatch.setattr(engine.solver, "check", lambda: z3.unknown)
+  monkeypatch.setattr(engine.solver, "reason_unknown", lambda: "timeout")
+  result = engine.query(symbol)
+  assert result["status"] == "SOLVER_UNKNOWN"
+  assert result["reason"] == {"true": "timeout", "false": "timeout"}
+  assert [record.__dict__["solver_query"] for record in caplog.records] == [
+    "true",
+    "false",
+  ]
+  assert all(
+    "sensitive_predicate" not in record.getMessage() for record in caplog.records
+  )
+
+
+def test_invalid_unicode_is_rejected_before_solver_work(
+  monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  case = json.loads(replay())
+  case["context"] += chr(0xD800)
+  monkeypatch.setattr(
+    "unmask.judge.audit", lambda _: pytest.fail("invalid Unicode reached solver")
+  )
+  with pytest.raises(ValidationError, match="invalid Unicode"):
+    audit_judge_case(json.dumps(case))
+
+
+@pytest.mark.parametrize(
+  "route", ["/api/v1/judge-audits", "/api/v1/judge-audits/validate"]
+)
+def test_api_reports_invalid_unicode_as_a_validation_error(route: str) -> None:
+  case = json.loads(replay())
+  case["context"] += chr(0xD800)
+  response = (
+    create_app().test_client().post(route, json={"case": {"text": json.dumps(case)}})
+  )
+  assert response.status_code == 400
+  assert response.json["error"]["code"] == "invalid_audit_case"
+  assert "invalid Unicode" in response.json["error"]["message"]
 
 
 def test_audits_use_independent_solver_contexts() -> None:
@@ -219,7 +306,7 @@ def test_solver_failure_is_structured_and_releases_slot(monkeypatch) -> None:
   def fail_solver(*args, **kwargs):
     raise z3.Z3Exception("injected solver failure")
 
-  monkeypatch.setattr("unmask.judge_audit.service.audit", fail_solver)
+  monkeypatch.setattr("unmask.judge.audit", fail_solver)
   application = create_app()
   response = application.test_client().post(
     "/api/v1/judge-audits",

@@ -2,12 +2,67 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Literal as TypingLiteral
 from typing import cast
 
 type Decision = TypingLiteral["allow", "block"]
 type BugType = TypingLiteral["over_strict", "contradiction", "ambiguity"]
+
+
+def canonical_json_hash(payload: dict[str, object]) -> str:
+  """Bind a JSON payload independently of mapping order and JSON whitespace.
+
+  Raises:
+    TypeError: if the payload contains values that JSON cannot encode.
+    ValueError: if the payload contains a circular reference.
+  """
+  encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+  return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class StructuralUnit:
+  """One source region that can be associated with analysis findings."""
+
+  id: str
+  kind: str
+  rule_id: str
+  start: int
+  end: int
+
+  def to_dict(self) -> dict[str, object]:
+    return {
+      "id": self.id,
+      "kind": self.kind,
+      "ruleId": self.rule_id,
+      "start": self.start,
+      "end": self.end,
+    }
+
+
+@dataclass(frozen=True)
+class SourceDocument:
+  """A verbatim source document and its addressable structural units."""
+
+  id: str
+  role: str
+  name: str
+  raw_text: str
+  structural_units: tuple[StructuralUnit, ...]
+  media_type: str = "application/yaml"
+
+  def to_dict(self) -> dict[str, object]:
+    return {
+      "id": self.id,
+      "role": self.role,
+      "name": self.name,
+      "mediaType": self.media_type,
+      "rawText": self.raw_text,
+      "structuralUnits": [item.to_dict() for item in self.structural_units],
+    }
 
 
 def _require_text(value: object, name: str) -> str:

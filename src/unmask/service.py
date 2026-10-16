@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import itertools
-import json
 import logging
 import time
 from collections.abc import Callable
@@ -30,7 +28,9 @@ from .diagnosis import (
 )
 from .extractor import SemanticExtractor
 from .importer import ImportedViolation, load_violations_text
-from .models import Finding, Guardrail, SymbolicModel
+from .models import Finding, Guardrail, SymbolicModel, canonical_json_hash
+from .models import SourceDocument as SourceDocument
+from .models import StructuralUnit as StructuralUnit
 from .repair import (
   CandidateEdit,
   FindingFingerprint,
@@ -83,48 +83,6 @@ _compose_yaml = cast("Callable[[str], object]", yaml.compose)
 
 class BackendFactory(Protocol):
   def __call__(self, config: TargetConfig) -> JudgeBackend: ...
-
-
-@dataclass(frozen=True)
-class StructuralUnit:
-  """One source region that can be associated with analysis findings."""
-
-  id: str
-  kind: str
-  rule_id: str
-  start: int
-  end: int
-
-  def to_dict(self) -> dict[str, object]:
-    return {
-      "id": self.id,
-      "kind": self.kind,
-      "ruleId": self.rule_id,
-      "start": self.start,
-      "end": self.end,
-    }
-
-
-@dataclass(frozen=True)
-class SourceDocument:
-  """A verbatim source document and its addressable structural units."""
-
-  id: str
-  role: str
-  name: str
-  raw_text: str
-  structural_units: tuple[StructuralUnit, ...]
-  media_type: str = "application/yaml"
-
-  def to_dict(self) -> dict[str, object]:
-    return {
-      "id": self.id,
-      "role": self.role,
-      "name": self.name,
-      "mediaType": self.media_type,
-      "rawText": self.raw_text,
-      "structuralUnits": [item.to_dict() for item in self.structural_units],
-    }
 
 
 @dataclass(frozen=True)
@@ -421,11 +379,6 @@ def _regex_finding(
   )
 
 
-def _stable_hash(payload: dict[str, object]) -> str:
-  encoded: str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-  return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
 def scan_specification(
   specification_text: str,
   *,
@@ -458,7 +411,7 @@ def scan_specification(
         "thinkingBudget": target.thinking_budget,
       }
     )
-  content_hash: str = _stable_hash(binding)
+  content_hash: str = canonical_json_hash(binding)
   if validation.specification_kind == "natural_language":
     guardrail: Guardrail = load_guardrail_text(specification_text)
     taxonomy: object | None = (
@@ -588,7 +541,7 @@ def diagnose_specification(
     for index, report in enumerate(reports, start=1)
     for finding in report.findings
   )
-  content_hash: str = _stable_hash(
+  content_hash: str = canonical_json_hash(
     {
       "schemaVersion": 1,
       "workflow": "diagnose",

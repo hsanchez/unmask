@@ -3,8 +3,7 @@ import random
 
 import pytest
 
-from unmask.judge_audit.auditor import audit
-from unmask.judge_audit.models import AuditInput, ValidationError
+from unmask.judge import AuditInput, ValidationError, audit
 
 
 def data(decision=None, findings=None):

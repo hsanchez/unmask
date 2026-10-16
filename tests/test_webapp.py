@@ -56,10 +56,14 @@ def test_index_serves_studio_with_security_headers(application: Flask) -> None:
   assert b'href="https://github.com/hsanchez/unmask#readme"' in response_data
   assert b'class="analysis-actions"' in response_data
   assert b'id="analyze-button"' in response_data
-  assert b'href="/assets/style.css?v=21"' in response_data
-  assert b'src="/assets/app.js?v=21"' in response_data
+  assert b'href="/assets/style.css?v=22"' in response_data
+  assert b'src="/assets/app.js?v=22"' in response_data
   assert b'id="regex-model-note"' in response_data
   assert b'id="workflow-note"' in response_data
+  assert b'<label for="audit-paste">Or paste replay JSON</label>' in response_data
+  assert b'aria-describedby="audit-import-hint"' in response_data
+  assert b'class="audit-import-submit"' in response_data
+  assert b'src="/assets/audit.js?v=4"' in response_data
   assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
   assert "no-store" in response.headers["Cache-Control"]
 

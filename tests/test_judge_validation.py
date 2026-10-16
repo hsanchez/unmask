@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from unmask.judge_audit.models import AuditInput, ValidationError
+from unmask.judge import AuditInput, ValidationError
 
 
 def data():
@@ -77,3 +77,64 @@ def test_unknown_needs_no_fabricated_evidence():
   d = data()
   d["findings"][0].update(value="UNKNOWN", evidence=[])
   AuditInput.parse(d)
+
+
+def test_evidence_can_preserve_an_exact_whitespace_quote():
+  replay = data()
+  start = replay["rationale"].index(" ")
+  replay["findings"][0]["evidence"] = [
+    {"source": "rationale", "start": start, "end": start + 1, "quote": " "}
+  ]
+
+  parsed = AuditInput.parse(replay)
+
+  assert parsed.findings[0].evidence[0].quote == " "
+
+
+@pytest.mark.parametrize("field", ["id", "context", "response", "rationale"])
+@pytest.mark.parametrize("surrogate", [0xD800, 0xDFFF])
+def test_decoded_replay_rejects_lone_surrogates(field: str, surrogate: int) -> None:
+  replay = data()
+  replay[field] += chr(surrogate)
+  with pytest.raises(ValidationError, match="invalid Unicode"):
+    AuditInput.parse(replay)
+
+
+@pytest.mark.parametrize("surrogate", [0xD800, 0xDFFF])
+def test_json_replay_rejects_escaped_lone_surrogates(surrogate: int) -> None:
+  replay = data()
+  replay["context"] += chr(surrogate)
+  with pytest.raises(ValidationError, match="invalid Unicode"):
+    AuditInput.from_json(json.dumps(replay))
+
+
+def test_json_replay_rejects_unescaped_lone_surrogates() -> None:
+  with pytest.raises(ValidationError, match="invalid Unicode"):
+    AuditInput.from_json('"' + chr(0xD800) + '"')
+
+
+def test_json_replay_accepts_an_escaped_surrogate_pair() -> None:
+  replay = data()
+  replay["context"] += chr(0x1F6AB)
+  parsed = AuditInput.from_json(json.dumps(replay, ensure_ascii=True))
+  assert parsed.context == replay["context"]
+
+
+def test_protocol_text_is_not_observed_procedural_evidence() -> None:
+  replay = data()
+  procedure_atoms = {
+    atom["id"] for atom in replay["protocol"]["atoms"] if atom["role"] == "procedure"
+  }
+  finding = next(
+    finding for finding in replay["findings"] if finding["atom"] in procedure_atoms
+  )
+  finding["evidence"] = [
+    {
+      "source": "protocol",
+      "start": 0,
+      "end": 1,
+      "quote": replay["protocol"]["text"][:1],
+    }
+  ]
+  with pytest.raises(ValidationError, match="invalid evidence source"):
+    AuditInput.parse(replay)

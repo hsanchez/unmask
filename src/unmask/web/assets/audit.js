@@ -42,7 +42,7 @@ function startAuditImport(replace = false) {
   elements.sourceView.hidden = true;
   elements.analysisControls.hidden = true;
   elements.analysisEmpty.hidden = false;
-  elements.analysisEmpty.textContent = "Import annotated JSON. Audits run locally without a model provider.";
+  elements.analysisEmpty.textContent = "Local audit · no model provider";
   elements.workflowToggle.hidden = false;
   elements.scanMode.classList.remove("active");
   elements.scanMode.setAttribute("aria-pressed", "false");
@@ -54,7 +54,7 @@ function startAuditImport(replace = false) {
   element("audit-paste").value = "";
   element("audit-import-cancel").hidden = !state.auditReplacement;
   element("audit-import-cancel").disabled = false;
-  renderFindingMessage("Review supplied annotations, then run the audit. Raw prose is not automatically translated.");
+  renderFindingMessage("Load a case to view audit results.");
   elements.summary.hidden = true;
   setNotice("");
   renderStudyLists();
@@ -67,7 +67,7 @@ async function validateAuditStudy(study) {
   });
   if (text !== study.auditCaseText) throw new Error("Case changed during validation. Select it again.");
   study.validation = validation;
-  if (!UnmaskAudit.cached(study, state.capabilities.judgeAudits.auditorVersion)) study.cachedRun = null;
+  if (!matchingCachedRun(study)) study.cachedRun = null;
   return study;
 }
 
@@ -142,10 +142,14 @@ function showAuditEvidence(study, reference, identifier) {
 
 function auditEvidenceButtons(study, references, identifier) {
   const group = auditElement("div", "", "audit-evidence-links");
+  const seen = new Set();
   for (const reference of references) {
+    const key = JSON.stringify([reference.documentId, reference.start, reference.end]);
+    if (seen.has(key)) continue;
+    seen.add(key);
     const button = auditElement("button", `${reference.documentId} · ${reference.start}–${reference.end}`, "text-button");
     button.type = "button";
-    button.addEventListener("click", () => showAuditEvidence(study, reference, identifier));
+    button.addEventListener("click", () => showAuditEvidence(study, reference, reference.checkId || identifier));
     group.append(button);
   }
   return group;
@@ -195,7 +199,7 @@ function renderAuditSource(study) {
   elements.sourceName.textContent = annotations ? "Supplied annotations" : selected.name;
   if (annotations) renderAuditAnnotations(study);
   else {
-    const run = UnmaskAudit.cached(study, state.capabilities.judgeAudits.auditorVersion);
+    const run = matchingCachedRun(study);
     renderSource(selected, [...auditReferences(study), ...(run?.checks || [])]);
     applyHighlights();
   }
@@ -209,15 +213,26 @@ function auditProofDetails(proof) {
   return details;
 }
 
+function auditCheckGroups(checks) {
+  const groups = new Map();
+  for (const check of checks) {
+    const key = ["procedure", "coverage"].includes(check.dimension)
+      ? `requirement:${check.id.slice(check.id.indexOf(":") + 1)}` : check.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(check);
+  }
+  return [...groups.values()];
+}
+
 function renderAuditResults(study) {
-  const run = UnmaskAudit.cached(study, state.capabilities.judgeAudits.auditorVersion);
+  const run = matchingCachedRun(study);
   elements.summary.hidden = !run;
   elements.findingCount.textContent = String(run?.checks.length || 0);
   elements.findingCount.setAttribute("aria-label", `${run?.checks.length || 0} audit checks`);
   elements.mobileFindingCount.textContent = String(run?.checks.length || 0);
   element("audit-export-report").disabled = !run;
   if (!run) {
-    renderFindingMessage("Run the local audit to check the supplied annotations. No live extraction is performed.");
+    renderFindingMessage("Run audit to inspect this case.");
     return;
   }
   elements.summary.textContent = `${run.summary.status.replaceAll("_", " ")} · protocol adherence ${run.summary.overall.toLowerCase()}`;
@@ -230,26 +245,31 @@ function renderAuditResults(study) {
   if (run.audit.gold_verdict) elements.findingList.append(auditElement("p", `Gold comparison (separate): observed ${run.audit.observed_verdict}; gold ${run.audit.gold_verdict}; ${run.audit.verdict_correct ? "matches" : "differs"}.`, "audit-note"));
   elements.findingList.append(auditElement("p", `Unconstrained atoms: ${run.unknownAtoms.join(", ") || "none"}. Compatibility alone does not establish entailment.`, "audit-note"));
   if (run.audit.solver?.unsat_core?.length) elements.findingList.append(auditElement("p", `Conflicting inputs: ${run.audit.solver.unsat_core.join(", ")}. This conflict set need not be minimal.`, "audit-note"));
-  for (const check of run.checks) {
+  const atomDescriptions = new Map(study.validation.case.protocol.atoms.map(atom => [atom.id, atom.description]));
+  for (const checks of auditCheckGroups(run.checks)) {
+    const check = checks[0];
     const card = auditElement("article", "", "finding-card audit-check");
-    card.dataset.findingId = check.id;
-    card.tabIndex = 0;
-    card.append(auditElement("p", `${check.dimension} · ${check.status.replaceAll("_", " ")}`, "finding-type"), auditElement("h3", check.summary));
-    if (check.dimension === "coverage" && check.status !== "ENTAILED") card.append(auditElement("p", "Not established by observable evidence. This makes no claim about hidden reasoning."));
-    card.append(auditEvidenceButtons(study, check.sourceReferences, check.id));
-    card.append(auditProofDetails(check.proof));
-    bindFindingPreview(card, [check.id]);
-    card.addEventListener("click", (event) => { if (event.target === card) pinFindings([check.id]); });
-    card.addEventListener("keydown", (event) => {
-      if (event.target === card && (event.key === "Enter" || event.key === " ")) {
-        event.preventDefault();
-        if (check.sourceReferences.length) showAuditEvidence(study, check.sourceReferences[0], check.id);
-        else pinFindings([check.id]);
-      }
+    let title = check.summary;
+    if (check.dimension === "grounding" && check.atoms?.length) {
+      title = check.atoms.map(identifier => atomDescriptions.get(identifier) || identifier).join(" ↔ ");
+    }
+    card.append(auditElement("h3", title));
+    card.append(auditElement("p", checks.map(item => `${item.dimension} · ${item.status.replaceAll("_", " ")}`).join(" / "), "finding-type"));
+    if (checks.some(item => item.dimension === "coverage" && item.status !== "ENTAILED")) card.append(auditElement("p", "Not established by observable evidence. This makes no claim about hidden reasoning."));
+    const references = checks.flatMap(item => item.sourceReferences.map(reference => ({...reference, checkId: item.id})));
+    card.append(auditEvidenceButtons(study, references, check.id));
+    card.append(auditProofDetails(Object.fromEntries(checks.map(item => [item.id, item.proof]))));
+    const identifiers = checks.map(item => item.id);
+    bindFindingCard(card, identifiers, () => {
+      if (references.length) showAuditEvidence(study, references[0], references[0].checkId);
+      pinFindings(identifiers);
     });
     elements.findingList.append(card);
   }
-  for (const limitation of run.limitations) elements.findingList.append(auditElement("p", limitation, "audit-note"));
+  const limitations = auditElement("details", "", "audit-proof");
+  limitations.append(auditElement("summary", "Scope and limitations"));
+  for (const limitation of new Set(run.limitations)) limitations.append(auditElement("p", limitation, "audit-note"));
+  elements.findingList.append(limitations);
 }
 
 function renderAuditWorkspace(study) {
@@ -268,48 +288,18 @@ function renderAuditWorkspace(study) {
   for (const control of [elements.providerControl, elements.modelControl, elements.thinkingBudgetControl,
     elements.taxonomyControl, elements.incidentsButton, elements.regexModelNote, elements.workflowNote]) control.hidden = true;
   elements.providerDisclosure.hidden = false;
-  elements.providerDisclosure.textContent = "Audits supplied annotations locally. No model provider is called.";
+  elements.providerDisclosure.textContent = "Local audit · no model provider";
   elements.analyzeButton.textContent = state.scanController ? "Cancel" : "Run audit";
   elements.analyzeButton.disabled = false;
-  element("audit-verdict").textContent = `Observed judge verdict: ${study.validation.case.verdict} · read-only replay`;
+  element("audit-verdict").textContent = `Judge verdict: ${study.validation.case.verdict} · read-only`;
   renderAuditSource(study);
   renderAuditResults(study);
-}
-
-async function runAuditStudy(study) {
-  if (state.scanController) { state.scanController.abort(); return; }
-  const controller = new AbortController();
-  const text = study.auditCaseText;
-  state.scanController = controller;
-  elements.analyzeButton.textContent = "Cancel";
-  setNotice("");
-  try {
-    const report = await api("/api/v1/judge-audits", {
-      method: "POST", signal: controller.signal,
-      body: JSON.stringify({case: {name: study.auditCaseName, text}, contentHash: study.validation.contentHash}),
-    });
-    if (!UnmaskAudit.current(study, state.activeStudy, text, controller)) return;
-    if (report.contentHash !== study.validation.contentHash) throw new Error("Stale audit response discarded.");
-    study.cachedRun = report;
-    study.updatedAt = new Date().toISOString();
-    await saveStudy(study);
-    if (!UnmaskAudit.current(study, state.activeStudy, text, controller)) return;
-    renderAuditWorkspace(study);
-    setNotice(`Audit complete: ${report.summary.status.replaceAll("_", " ")}. Review each dimension.`, "success");
-  } catch (error) {
-    if (state.activeStudy === study) setNotice(error.name === "AbortError" ? "Audit cancelled. The local solver may finish its bounded checks." : error.message);
-  } finally {
-    if (state.scanController === controller) {
-      state.scanController = null;
-      if (state.activeStudy === study) elements.analyzeButton.textContent = "Run audit";
-    }
-  }
 }
 
 function exportAudit(report) {
   const study = state.activeStudy;
   if (!isAuditStudy(study)) return;
-  const payload = report ? UnmaskAudit.cached(study, state.capabilities.judgeAudits.auditorVersion) : study.validation.case;
+  const payload = report ? matchingCachedRun(study) : study.validation.case;
   if (!payload) return;
   const blob = new Blob([JSON.stringify(payload, null, 2) + "\n"], {type: "application/json"});
   const url = URL.createObjectURL(blob);

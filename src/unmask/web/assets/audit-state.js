@@ -27,9 +27,6 @@ const UnmaskAudit = {
     }
     return {text, historical: false};
   },
-  current(study, activeStudy, text, controller) {
-    return activeStudy === study && study.auditCaseText === text && !controller.signal.aborted;
-  },
   replace(study, text, name, validation) {
     return {...study, auditCaseText: text, auditCaseName: name, validation, cachedRun: null,
       activeDocument: "protocol", auditView: "sources", updatedAt: new Date().toISOString()};

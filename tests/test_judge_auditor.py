@@ -7,11 +7,70 @@ from pathlib import Path
 import pytest
 import z3
 
-from unmask.judge_audit.auditor import audit
-from unmask.judge_audit.models import AuditInput, Expr
-from unmask.judge_audit.solver import Engine, compile_expr
+from unmask.judge import AuditInput, Expr, audit, compile_expr
+from unmask.solver import Engine
 
 EXAMPLES = Path(__file__).resolve().parent / "fixtures/judge_audit"
+
+
+@pytest.mark.parametrize("operator,identity", [("and", True), ("or", False)])
+def test_compiled_boolean_operations_keep_the_audit_context(
+  operator: str, identity: bool
+) -> None:
+  context = z3.Context()
+  symbol = z3.Bool("a", ctx=context)
+  expression = Expr.parse(
+    {"op": operator, "args": [{"const": identity}, {"atom": "a"}]},
+    {"a"},
+    [0],
+  )
+  compiled = compile_expr(expression, {"a": symbol})
+  solver = z3.Solver(ctx=context)
+  solver.add(compiled, z3.Not(symbol))
+  assert compiled.ctx == context
+  assert solver.check() == z3.unsat
+
+
+@pytest.mark.parametrize(
+  "raw_expression,expected",
+  [
+    ({"const": True}, True),
+    ({"const": False}, False),
+    ({"op": "and", "args": [{"const": True}, {"const": False}]}, False),
+    ({"op": "or", "args": [{"const": False}, {"const": True}]}, True),
+    ({"op": "not", "args": [{"const": False}]}, True),
+    ({"op": "implies", "args": [{"const": True}, {"const": False}]}, False),
+    ({"op": "iff", "args": [{"const": False}, {"const": False}]}, True),
+  ],
+)
+def test_ground_formulas_compile_without_dummy_symbols(
+  raw_expression: dict[str, object], expected: bool
+) -> None:
+  context = z3.Context()
+  expression = Expr.parse(raw_expression, set(), [0])
+  compiled = compile_expr(expression, {}, context=context)
+  solver = z3.Solver(ctx=context)
+  solver.add(compiled)
+  assert compiled.ctx == context
+  assert solver.check() == (z3.sat if expected else z3.unsat)
+
+
+@pytest.mark.parametrize("value", [False, True])
+def test_ground_constants_default_to_the_main_context(value: bool) -> None:
+  compiled = compile_expr(Expr("const", value=value), {})
+  assert compiled.ctx == z3.main_ctx()
+  assert z3.is_true(compiled) is value
+
+
+def test_expression_compilation_rejects_an_incompatible_explicit_context() -> None:
+  operand_context = z3.Context()
+  selected_context = z3.Context()
+  with pytest.raises(z3.Z3Exception, match="context mismatch"):
+    compile_expr(
+      Expr("atom", atom="a"),
+      {"a": z3.Bool("a", ctx=operand_context)},
+      context=selected_context,
+    )
 
 
 def load(prefix="A_"):

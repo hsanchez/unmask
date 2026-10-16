@@ -1,3 +1,5 @@
+import hashlib
+import json
 from typing import cast
 
 import pytest
@@ -9,12 +11,45 @@ from unmask.models import (
   GuardrailRule,
   Literal,
   RuleSemantics,
+  SourceDocument,
+  StructuralUnit,
   SymbolicModel,
+  canonical_json_hash,
   condition_to_list,
   parse_condition,
 )
 
 _CONDITION_RAW = [[{"predicate": "is_educational", "value": True}]]
+
+
+def test_source_document_preserves_verbatim_text_and_structural_ranges() -> None:
+  document = SourceDocument(
+    id="specification",
+    role="specification",
+    name="guardrail.yaml",
+    raw_text="rules:\r\n  - 🚫  \r\n",
+    structural_units=(StructuralUnit("rule:1", "rule", "rule:1", 10, 13),),
+  )
+  assert document.to_dict() == {
+    "id": "specification",
+    "role": "specification",
+    "name": "guardrail.yaml",
+    "mediaType": "application/yaml",
+    "rawText": "rules:\r\n  - 🚫  \r\n",
+    "structuralUnits": [
+      {"id": "rule:1", "kind": "rule", "ruleId": "rule:1", "start": 10, "end": 13}
+    ],
+  }
+
+
+def test_canonical_json_hash_preserves_legacy_encoding() -> None:
+  payload = {"z": ["🚫", {"b": False, "a": None}], "a": "é"}
+  expected = hashlib.sha256(
+    json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+  ).hexdigest()
+  assert canonical_json_hash(payload) == expected
+  assert canonical_json_hash(dict(reversed(list(payload.items())))) == expected
+  assert canonical_json_hash({**payload, "a": "e"}) != expected
 
 
 class TestGuardrailRule:

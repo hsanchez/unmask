@@ -56,7 +56,7 @@ function studio() {
       summary:'summary', findingCount:'finding-count', mobileFindingCount:'mobile-finding-count', findingList:'finding-list',
       sampleList:'sample-list', importList:'import-list', importsEmpty:'imports-empty', restoreSamplesButton:'restore-samples-button',
       clearButton:'clear-button', studyCount:'study-count', notice:'notice', analysisGrid:'analysis-grid',
-      copyStatus:'copy-status', thinkingBudgetInput:'thinking-budget-input'
+      copyStatus:'copy-status', thinkingBudgetInput:'thinking-budget-input', storageStatus:'storage-status'
     })) elements[key] = element(id);
     state.capabilities = {judgeAudits:{auditorVersion:'1'}, maxRequestBytes:1000000};
     storageRequest = async (mode, action) => action({getAll: () => [...saved.values()], put: record => saved.set(record.id, structuredClone(record))});
@@ -103,6 +103,25 @@ test('new case opens an importer while retaining the saved active case', async (
   assert.equal(app.run('state.activeStudy'), null);
   assert.equal(app.saved.size, 1);
   assert.equal(app.nodes.get('audit-import-panel').hidden, false);
+});
+
+test('audit import uses concise guidance without repeating the input requirements', () => {
+  const app = studio();
+  app.run('startAuditImport()');
+  assert.equal(app.nodes.get('analysis-empty').textContent, 'Local audit · no model provider');
+  assert.equal(app.nodes.get('finding-list').textContent, 'Load a case to view audit results.');
+  assert.equal(app.nodes.get('audit-source-controls').hidden, true);
+});
+
+test('loaded audit uses compact labels and restores specification headings when leaving', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)');
+  assert.equal(app.nodes.get('provider-disclosure').textContent, 'Local audit · no model provider');
+  assert.equal(app.nodes.get('audit-verdict').textContent, `Judge verdict: ${JSON.parse(fixture).verdict} · read-only`);
+  assert.equal(app.nodes.get('finding-list').textContent, 'Run audit to inspect this case.');
+  app.run('configureAuditWorkspace(false)');
+  assert.equal(app.nodes.get('source-heading').textContent, 'specification(source)');
+  assert.equal(app.nodes.get('findings-heading').textContent, 'specification bugs(structure)');
+  assert.equal(app.nodes.get('audit-import-panel').hidden, true);
 });
 
 test('keeping current case discards an in-flight replacement validation', async () => {
@@ -278,6 +297,108 @@ test('audit execution exports portable case and report with separate uncertainty
   assert.equal(JSON.parse(await app.downloads[1].text()).workflow, 'audit_judge');
 });
 
+test('requirement cards combine procedure and coverage without losing either proof or status', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)');
+  app.run(`
+    const result = report(fixture);
+    const reference = {documentId:'rationale',start:0,end:5};
+    result.checks = [
+      {id:'procedure:first', dimension:'procedure', summary:'Same title', status:'ENTAILED', proof:{status:'ENTAILED'}, sourceReferences:[reference, reference]},
+      {id:'coverage:first', dimension:'coverage', summary:'Same title', status:'REFUTED', proof:{status:'REFUTED'}, sourceReferences:[reference]},
+      {id:'procedure:second', dimension:'procedure', summary:'Same title', status:'ENTAILED', proof:{status:'ENTAILED'}, sourceReferences:[reference]},
+    ];
+    state.activeStudy.cachedRun = result;
+    renderAuditResults(state.activeStudy);
+  `);
+  const cards = app.nodes.get('finding-list').querySelectorAll('.audit-check');
+  assert.equal(cards.length, 2);
+  assert.match(cards[0].textContent, /procedure · ENTAILED \/ coverage · REFUTED/);
+  assert.match(cards[0].textContent, /Not established by observable evidence/);
+  assert.equal(cards[0].querySelectorAll('.text-button').length, 1);
+  assert.equal(cards[0].querySelectorAll('.audit-proof').length, 1);
+  assert.match(cards[0].querySelector('.audit-json').textContent, /"procedure:first"/);
+  assert.match(cards[0].querySelector('.audit-json').textContent, /"coverage:first"/);
+  assert.equal(app.run('state.activeStudy.cachedRun.checks.length'), 3);
+  cards[0].querySelector('.text-button').click();
+  assert.equal(app.run('state.pinnedFindingIds[0]'), 'procedure:first');
+});
+
+test('evidence deduplication retains different ranges and source documents', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)');
+  assert.equal(app.run(`auditEvidenceButtons(state.activeStudy, [
+    {documentId:'rationale',start:0,end:5},
+    {documentId:'rationale',start:0,end:5,annotationId:'other'},
+    {documentId:'rationale',start:1,end:5},
+    {documentId:'context',start:0,end:5},
+  ], 'verdict').children.length`), 3);
+});
+
+test('grounding cards identify distinct claims even when their evidence is identical', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)');
+  app.run(`
+    const result = report(fixture);
+    result.checks = [['j1','c1'],['j2','c2']].map((atoms, index) => ({
+      id:'grounding:' + index, dimension:'grounding', summary:'Compare judge finding with independent grounding',
+      atoms, status:'ENTAILED', proof:{status:'ENTAILED'}, sourceReferences:[],
+    }));
+    state.activeStudy.cachedRun = result;
+    renderAuditResults(state.activeStudy);
+  `);
+  const cards = app.nodes.get('finding-list').querySelectorAll('.audit-check');
+  assert.equal(cards.length, 2);
+  assert.match(cards[0].children[0].textContent, /joining ACME/);
+  assert.match(cards[1].children[0].textContent, /CTO role/);
+});
+
+test('audit limitations remain available in one collapsed section', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)'); await app.run('analyzeActiveStudy()');
+  const sections = app.nodes.get('finding-list').querySelectorAll('.audit-proof');
+  const limitations = sections.at(-1);
+  assert.equal(limitations.tagName, 'details');
+  assert.equal(limitations.children[0].textContent, 'Scope and limitations');
+  assert.match(limitations.textContent, /Bounded replay/);
+  assert.equal(limitations.attributes.open, undefined);
+});
+
+test('grouped cards preview both checks and stay active when coverage evidence is selected', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)');
+  app.run(`
+    const result = report(fixture);
+    result.checks = ['procedure','coverage'].map((dimension, index) => ({
+      id:dimension + ':first', dimension, summary:'Requirement', status:'ENTAILED', proof:{status:'ENTAILED'},
+      sourceReferences:[{documentId:'rationale',start:index * 5,end:index * 5 + 5}],
+    }));
+    state.activeStudy.cachedRun = result;
+    renderAuditWorkspace(state.activeStudy);
+  `);
+  const card = app.nodes.get('finding-list').querySelector('.audit-check');
+  card.listeners.mouseenter();
+  assert.deepEqual(JSON.parse(app.run('JSON.stringify(state.hoveredFindingIds)')), ['procedure:first', 'coverage:first']);
+  card.listeners.mouseleave();
+  card.querySelectorAll('.text-button')[1].click();
+  assert.equal(app.run('state.pinnedFindingIds[0]'), 'coverage:first');
+  assert.equal(card.className.includes('active'), true);
+  card.listeners.keydown({target:card, key:'Enter', preventDefault(){}});
+  assert.deepEqual(JSON.parse(app.run('JSON.stringify(state.pinnedFindingIds)')), ['procedure:first', 'coverage:first']);
+});
+
+test('grouped card activation navigates to coverage evidence when procedure has no evidence', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)');
+  app.run(`
+    const result = report(fixture);
+    result.checks = ['procedure','coverage'].map(dimension => ({
+      id:dimension + ':first', dimension, summary:'Requirement', status:'ENTAILED', proof:{status:'ENTAILED'},
+      sourceReferences:dimension === 'procedure' ? [] : [{documentId:'rationale',start:0,end:5}],
+    }));
+    state.activeStudy.cachedRun = result;
+    renderAuditWorkspace(state.activeStudy);
+  `);
+  const card = app.nodes.get('finding-list').querySelector('.audit-check');
+  card.listeners.click({target:card});
+  assert.equal(app.run('state.activeStudy.activeDocument'), 'rationale');
+  assert.deepEqual(JSON.parse(app.run('JSON.stringify(state.pinnedFindingIds)')), ['procedure:first', 'coverage:first']);
+});
+
 test('reload revalidates a persisted case and retains only compatible cached results', async () => {
   const app = studio(); await app.run('importAuditText(fixture)'); await app.run('analyzeActiveStudy()');
   await app.run('loadImports();'); await app.run('selectStudy(state.imports[0])');
@@ -298,7 +419,7 @@ test('replacement preserves study identity while invalidating report and evidenc
 
 test('late audit responses do not overwrite a replaced or deselected case', async () => {
   const app = studio(); await app.run('importAuditText(fixture)');
-  app.run(`let resolveAudit; api=()=>new Promise(resolve=>{resolveAudit=resolve}); let pending=runAuditStudy(state.activeStudy); let oldStudy=state.activeStudy; state.activeStudy=null; resolveAudit(report(fixture));`);
+  app.run(`let resolveAudit; api=()=>new Promise(resolve=>{resolveAudit=resolve}); let pending=analyzeActiveStudy(); let oldStudy=state.activeStudy; state.activeStudy=null; resolveAudit(report(fixture));`);
   await app.run('pending');
   assert.equal(app.run('oldStudy.cachedRun'), null);
 });
@@ -339,7 +460,7 @@ for (const [name, navigation] of [
       let finishSave, markSaving;
       let saving = new Promise(resolve => { markSaving = resolve; });
       saveStudy = () => new Promise(resolve => { finishSave = resolve; markSaving(); });
-      let pending = runAuditStudy(state.activeStudy);
+      let pending = analyzeActiveStudy();
     `);
     await app.run('saving');
     app.run(navigation);
@@ -360,13 +481,30 @@ test('cancel during audit persistence does not publish a completion notice', asy
     let finishSave, markSaving;
     let saving = new Promise(resolve => { markSaving = resolve; });
     saveStudy = () => new Promise(resolve => { finishSave = resolve; markSaving(); });
-    let pending = runAuditStudy(state.activeStudy);
+    let pending = analyzeActiveStudy();
   `);
   await app.run('saving');
-  await app.run('runAuditStudy(state.activeStudy)');
+  await app.run('analyzeActiveStudy()');
   app.run('finishSave()'); await app.run('pending');
   assert.doesNotMatch(app.nodes.get('notice').textContent, /Audit complete/);
   assert.equal(app.nodes.get('analyze-button').textContent, 'Run audit');
+});
+
+test('audit rejects a response bound to a different case', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)');
+  app.run(`api = async () => ({...report(fixture), contentHash:'stale'});`);
+  await app.run('analyzeActiveStudy()');
+  assert.equal(app.run('state.activeStudy.cachedRun'), null);
+  assert.match(app.nodes.get('notice').textContent, /Stale audit response/);
+});
+
+test('audit save failures do not announce completion', async () => {
+  const app = studio(); await app.run('importAuditText(fixture)');
+  app.run(`saveStudy = async () => { throw new Error('storage failure'); };`);
+  await app.run('analyzeActiveStudy()');
+  assert.equal(app.nodes.get('analyze-button').textContent, 'Run audit');
+  assert.match(app.nodes.get('notice').textContent, /storage failure/);
+  assert.doesNotMatch(app.nodes.get('notice').textContent, /Audit complete/);
 });
 
 test('delayed import persistence does not select a case after newer navigation', async () => {
@@ -389,4 +527,215 @@ test('delayed import persistence does not select a case after newer navigation',
   assert.equal(app.nodes.get('study-title').textContent, 'Audit a judge evaluation');
   assert.doesNotMatch(app.nodes.get('notice').textContent, /Case loaded/);
   assert.equal(app.saved.size, 1);
+});
+
+async function runningStudio(workflow) {
+  const app = studio();
+  if (workflow === 'audit_judge') await app.run('importAuditText(fixture)');
+  else app.run(`
+    elements.thinkingBudgetInput.value = '128';
+    state.activeStudy = {id:'specification', specificationKind:'regex', specificationName:'a.yaml',
+      specificationText:'rules: []', settings:{workflow:${JSON.stringify(workflow)}, thinkingBudget:128},
+      cachedRun:null, incidents:{name:'cases.json',text:'[]'}};
+  `);
+  app.run(`
+    let renders = 0;
+    renderActiveStudy = () => { renders++; };
+    const result = ${workflow === 'audit_judge' ? 'report(fixture)' : '{findings:[]}'};
+  `);
+  return app;
+}
+
+for (const workflow of ['scan', 'diagnose', 'audit_judge']) {
+  test(`${workflow} ignores a response after cancellation even if fetch resolves`, async () => {
+    const app = await runningStudio(workflow);
+    app.run(`
+      let finishRequest;
+      api = () => new Promise(resolve => { finishRequest = resolve; });
+      let pending = analyzeActiveStudy();
+    `);
+    await app.run('analyzeActiveStudy()');
+    app.run('finishRequest(result)'); await app.run('pending');
+    assert.equal(app.run('state.activeStudy.cachedRun'), null);
+    assert.equal(app.run('renders'), 0);
+    assert.equal(app.run('state.scanController'), null);
+  });
+
+  test(`${workflow} rejects same-ID replacement objects`, async () => {
+    const app = await runningStudio(workflow);
+    app.run(`
+      let finishRequest;
+      api = () => new Promise(resolve => { finishRequest = resolve; });
+      const original = state.activeStudy;
+      let pending = analyzeActiveStudy();
+      state.activeStudy = {...original};
+      finishRequest(result);
+    `);
+    await app.run('pending');
+    assert.equal(app.run('original.cachedRun'), null);
+    assert.equal(app.run('renders'), 0);
+  });
+
+  test(`${workflow} ignores changed input while a request is pending`, async () => {
+    const app = await runningStudio(workflow);
+    app.run(`
+      let finishRequest;
+      api = () => new Promise(resolve => { finishRequest = resolve; });
+      let pending = analyzeActiveStudy();
+      ${workflow === 'audit_judge' ? "state.activeStudy.auditCaseText += ' ';" : "state.activeStudy.specificationText += '\\n';"}
+      finishRequest(result);
+    `);
+    await app.run('pending');
+    assert.equal(app.run('state.activeStudy.cachedRun'), null);
+    assert.equal(app.run('renders'), 0);
+  });
+
+  test(`${workflow} preserves newer navigation after a delayed save`, async () => {
+    const app = await runningStudio(workflow);
+    app.run(`
+      let finishSave, markSaving;
+      let saving = new Promise(resolve => { markSaving = resolve; });
+      api = async () => result;
+      saveStudy = () => new Promise(resolve => { finishSave = resolve; markSaving(); });
+      let pending = analyzeActiveStudy();
+    `);
+    await app.run('saving');
+    app.run(`state.activeStudy = null; elements.analyzeButton.textContent = 'Other workflow'; setNotice('New navigation'); finishSave();`);
+    await app.run('pending');
+    assert.equal(app.run('renders'), 0);
+    assert.equal(app.nodes.get('analyze-button').textContent, 'Other workflow');
+    assert.equal(app.nodes.get('notice').textContent, 'New navigation');
+  });
+
+  test(`${workflow} does not publish errors from a superseded request`, async () => {
+    const app = await runningStudio(workflow);
+    app.run(`
+      let failRequest;
+      api = () => new Promise((resolve, reject) => { failRequest = reject; });
+      let pending = analyzeActiveStudy();
+      state.activeStudy = null;
+      setNotice('New navigation');
+      failRequest(new Error('old failure'));
+    `);
+    await app.run('pending');
+    assert.equal(app.nodes.get('notice').textContent, 'New navigation');
+  });
+}
+
+for (const [field, value] of [['schemaVersion', 2], ['auditorVersion', 'old'], ['contentHash', 'old'], ['workflow', 'scan']]) {
+  test(`shared cache selection rejects mismatched audit ${field}`, async () => {
+    const app = studio(); await app.run('importAuditText(fixture)');
+    app.run(`state.activeStudy.cachedRun = {...report(fixture), ${field}:${JSON.stringify(value)}}`);
+    assert.equal(app.run('matchingCachedRun(state.activeStudy)'), null);
+  });
+}
+
+test('shared cache selection retains legacy scans but not diagnosis results', () => {
+  const app = studio();
+  assert.equal(app.run(`matchingCachedRun({settings:{workflow:'scan'},cachedRun:{id:'old'}}).id`), 'old');
+  assert.equal(app.run(`matchingCachedRun({settings:{workflow:'diagnose'},cachedRun:{id:'old'}})`), null);
+});
+
+for (const mutation of [
+  'state.activeStudy.settings.provider = "other"',
+  'state.activeStudy.settings.model = "other"',
+  'state.activeStudy.settings.workflow = "diagnose"',
+  'state.activeStudy.taxonomy = {name:"new.yaml",text:"[]"}',
+  'elements.thinkingBudgetInput.value = "256"',
+]) {
+  test(`scan rejects pending results after ${mutation}`, async () => {
+    const app = await runningStudio('scan');
+    app.run(`
+      let finishRequest;
+      api = () => new Promise(resolve => { finishRequest = resolve; });
+      let pending = analyzeActiveStudy();
+      ${mutation};
+      finishRequest(result);
+    `);
+    await app.run('pending');
+    assert.equal(app.run('state.activeStudy.cachedRun'), null);
+    assert.equal(app.run('renders'), 0);
+  });
+}
+
+test('completed analysis preserves a visible warning when persistence fails', async () => {
+  const app = await runningStudio('scan');
+  app.run(`
+    api = async () => result;
+    storageRequest = async () => { throw new Error('storage failed'); };
+  `);
+  await app.run('analyzeActiveStudy()');
+  assert.equal(app.run('state.storageAvailable'), false);
+  assert.match(app.nodes.get('notice').textContent, /Session only: local persistence is unavailable/);
+});
+
+test('diagnosis does not depend on the scan thinking budget', async () => {
+  const app = await runningStudio('diagnose');
+  app.run(`
+    elements.thinkingBudgetInput.value = '';
+    api = async (route, options) => {
+      calls.push({route, payload:JSON.parse(options.body)});
+      return result;
+    };
+  `);
+  await app.run('analyzeActiveStudy()');
+  assert.equal(app.calls.at(-1).route, '/api/v1/diagnoses');
+  assert.deepEqual(Object.keys(app.calls.at(-1).payload).sort(), ['specification', 'violations']);
+  assert.equal(app.run('renders'), 1);
+  assert.match(app.nodes.get('notice').textContent, /Diagnosis complete/);
+});
+
+test('diagnosis retains pending results when only scan settings change', async () => {
+  const app = await runningStudio('diagnose');
+  app.run(`
+    let finishRequest;
+    api = () => new Promise(resolve => { finishRequest = resolve; });
+    let pending = analyzeActiveStudy();
+    state.activeStudy.settings.provider = 'other';
+    state.activeStudy.settings.model = 'other';
+    state.activeStudy.taxonomy = {name:'scan-only.yaml',text:'[]'};
+    elements.thinkingBudgetInput.value = '';
+    finishRequest(result);
+  `);
+  await app.run('pending');
+  assert.equal(app.run('state.activeStudy.cachedRun === result'), true);
+  assert.equal(app.run('renders'), 1);
+});
+
+test('diagnosis rejects pending results when incidents change', async () => {
+  const app = await runningStudio('diagnose');
+  app.run(`
+    let finishRequest;
+    api = () => new Promise(resolve => { finishRequest = resolve; });
+    let pending = analyzeActiveStudy();
+    state.activeStudy.incidents.text = '[{"content":"new"}]';
+    finishRequest(result);
+  `);
+  await app.run('pending');
+  assert.equal(app.run('state.activeStudy.cachedRun'), null);
+  assert.equal(app.run('renders'), 0);
+});
+
+test('audit execution explains when case validation is missing', async () => {
+  const app = await runningStudio('audit_judge');
+  app.run(`state.activeStudy.validation = null; calls.length = 0;`);
+  await app.run('analyzeActiveStudy()');
+  assert.equal(app.calls.length, 0);
+  assert.equal(app.run('state.scanController'), null);
+  assert.match(app.nodes.get('notice').textContent, /Validate this audit case before running it/);
+});
+
+test('shared card activation supports keyboard without intercepting nested controls', () => {
+  const app = studio();
+  app.run(`
+    const card = document.createElement('article');
+    let activated = 0, prevented = false;
+    bindFindingCard(card, 'check', () => { activated++; });
+    card.listeners.click({target:{closest:() => ({})}});
+    card.listeners.keydown({target:{}, key:'Enter', preventDefault(){}});
+    card.listeners.keydown({target:card, key:'Enter', preventDefault(){prevented = true;}});
+  `);
+  assert.equal(app.run('activated'), 1);
+  assert.equal(app.run('prevented'), true);
+  assert.equal(app.run('card.dataset.findingId'), 'check');
 });

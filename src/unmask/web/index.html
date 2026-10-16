@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Unmask · Specification studio</title>
-    <link rel="stylesheet" href="/assets/style.css?v=21">
+    <link rel="stylesheet" href="/assets/style.css?v=22">
   </head>
   <body>
     <header class="masthead">
@@ -124,17 +124,25 @@
               <select id="audit-document" aria-label="Source document"></select>
             </div>
             <div id="audit-import-panel" class="audit-import-panel" hidden>
-              <h3>Import an annotated evaluation</h3>
-              <p>Supply the protocol, context, candidate response, judge verdict and rationale together with their structured annotations. Sources remain read-only. Raw prose is not automatically translated.</p>
-              <div class="audit-import-buttons">
-                <button id="audit-import-file" type="button">Import JSON</button>
-                <button id="audit-example" type="button">Open example</button>
+              <div class="audit-import-body">
+                <div class="audit-import-intro">
+                  <h3>Load a judge replay</h3>
+                  <p id="audit-import-hint">Import a replay JSON with its structured annotations. Raw prose is not translated.</p>
+                </div>
+                <div class="audit-import-buttons">
+                  <button id="audit-import-file" type="button">Import JSON</button>
+                  <button id="audit-example" type="button">Open example</button>
+                </div>
+                <input id="audit-file" type="file" accept=".json,application/json" hidden>
+                <div class="audit-paste-field">
+                  <label for="audit-paste">Or paste replay JSON</label>
+                  <textarea id="audit-paste" rows="6" wrap="off" spellcheck="false" aria-describedby="audit-import-hint"></textarea>
+                </div>
               </div>
-              <input id="audit-file" type="file" accept=".json,application/json" hidden>
-              <label for="audit-paste">Or paste a complete replay case</label>
-              <textarea id="audit-paste" rows="10" spellcheck="false"></textarea>
-              <button id="audit-load-paste" type="button">Validate and load</button>
-              <button id="audit-import-cancel" type="button" hidden>Keep current case</button>
+              <div class="audit-import-submit">
+                <button id="audit-load-paste" class="run-button" type="button">Validate and load</button>
+                <button id="audit-import-cancel" type="button" hidden>Keep current case</button>
+              </div>
             </div>
             <div id="audit-annotations" class="audit-annotations" hidden></div>
             <pre id="source-view" class="source-view" tabindex="0"><span class="source-placeholder">Select a specification, then scan or diagnose it.</span></pre>
@@ -249,7 +257,7 @@
 
     <button id="drawer-overlay" class="drawer-overlay" type="button" aria-label="Close open panel" hidden></button>
     <script src="/assets/audit-state.js?v=1" defer></script>
-    <script src="/assets/audit.js?v=1" defer></script>
-    <script src="/assets/app.js?v=21" defer></script>
+    <script src="/assets/audit.js?v=4" defer></script>
+    <script src="/assets/app.js?v=22" defer></script>
   </body>
 </html>

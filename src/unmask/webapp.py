@@ -19,7 +19,7 @@ from werkzeug.exceptions import BadRequest, RequestEntityTooLarge, UnsupportedMe
 from werkzeug.serving import make_server
 
 from .config import TargetConfig
-from .judge_audit.service import AUDITOR_VERSION, audit_judge_case, validate_audit_case
+from .judge import AUDITOR_VERSION, audit_judge_case, validate_audit_case
 from .repair import PROPOSED_FIX_SCHEMA_VERSION, RepairGenerationError
 from .service import (
   DEFAULT_MODELS,

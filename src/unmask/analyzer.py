@@ -6,50 +6,29 @@ from itertools import combinations
 from typing import TYPE_CHECKING, cast
 
 from z3 import (
-  And,
   Bool,
   BoolRef,
-  ModelRef,
-  Not,
-  Or,
   Solver,
   Xor,
-  is_true,
   sat,
 )
 
 from .models import Condition, Finding, Guardrail, SymbolicModel
+from .solver import conjunction as _and
+from .solver import disjunction as _or
+from .solver import model_assignment, require_bool_ref
+from .solver import negation as _not
 
 if TYPE_CHECKING:
   from collections.abc import Mapping
 
 
-def _require_bool_ref(expression: object) -> BoolRef:
-  if not isinstance(expression, BoolRef):
-    raise TypeError(
-      f"Expected a Z3 boolean expression, got {type(expression).__name__}"
-    )
-  return expression
-
-
-def _and(*expressions: BoolRef) -> BoolRef:
-  return _require_bool_ref(cast("object", And(*expressions)))
-
-
 def _bool(name: str) -> BoolRef:
-  return _require_bool_ref(cast("object", Bool(name)))
-
-
-def _not(expression: BoolRef) -> BoolRef:
-  return _require_bool_ref(cast("object", Not(expression)))
-
-
-def _or(*expressions: BoolRef) -> BoolRef:
-  return _require_bool_ref(cast("object", Or(*expressions)))
+  return require_bool_ref(cast("object", Bool(name)))
 
 
 def _xor(left: BoolRef, right: BoolRef) -> BoolRef:
-  return _require_bool_ref(cast("object", Xor(left, right)))
+  return require_bool_ref(cast("object", Xor(left, right)))
 
 
 class SymbolicAnalyzer:
@@ -142,11 +121,7 @@ class SymbolicAnalyzer:
     solver.add(*self._global_constraints, *conditions)
     if solver.check() != sat:
       return None
-    result: ModelRef = solver.model()
-    return {
-      name: is_true(result.eval(variable, model_completion=True))
-      for name, variable in self._variables.items()
-    }
+    return model_assignment(solver.model(), self._variables)
 
   def _find_over_strict_rules(self) -> list[Finding]:
     safe: BoolRef = self._condition(self._model.safe_condition)

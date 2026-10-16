@@ -41,9 +41,9 @@ body {
   background: var(--paper);
 }
 
-button, input, select { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
@@ -354,6 +354,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   background: #f7f6f3;
 }
 .content-heading {
+  flex: 0 0 auto;
   min-height: 44px;
   display: flex;
   align-items: center;
@@ -537,7 +538,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
 .finding-footer { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 9px; }
 .rule-tags { display: flex; min-width: 0; flex: 1 1 auto; flex-wrap: wrap; gap: 4px 8px; overflow: hidden; }
 .rule-tag { max-width: 100%; overflow: hidden; color: var(--blue); font: 10px "SFMono-Regular", monospace; text-overflow: ellipsis; white-space: nowrap; }
-.empty-state { min-height: 260px; display: grid; place-items: center; align-content: center; color: var(--muted); text-align: center; }
+.empty-state { min-height: 260px; display: grid; place-items: center; align-content: center; padding: 12px; color: var(--muted); font-size: .78rem; line-height: 1.5; text-align: center; }
 .empty-state p { max-width: 250px; line-height: 1.55; }
 .finding-count {
   position: absolute;
@@ -556,12 +557,12 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
 }
 
-.analysis-heading { padding: 0 12px 0 16px; }
-.analysis-heading h2 { font-size: 1.18rem; }
-.workflow-toggle { display: flex; gap: 6px; margin-left: auto; }
+.analysis-heading { gap: 8px; padding: 0 12px; }
+.analysis-heading h2 { flex: 0 0 auto; font-size: 1.1rem; }
+.workflow-toggle { min-width: 0; display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .workflow-button {
   min-height: 30px;
-  padding: 4px 8px;
+  padding: 4px 6px;
   border: 1px solid var(--ink);
   border-radius: 8px;
   color: var(--ink);
@@ -569,6 +570,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   cursor: pointer;
   font-size: .68rem;
   font-weight: 500;
+  white-space: nowrap;
   transition: color .14s ease, background .14s ease, transform .14s ease;
 }
 .workflow-button.active { color: white; background: #050505; }
@@ -930,35 +932,48 @@ button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focu
   }
 }
 
-/* Replay sources retain their exact text while annotations and proofs scroll independently. */
-.analysis-heading { flex-wrap: wrap; }
-.workflow-toggle { order: 3; width: 100%; margin: 8px 0 0; flex-wrap: wrap; }
-.workflow-button { flex: 1; white-space: nowrap; }
 .study-kind-badge { font-size: .65rem; color: var(--muted); margin-left: auto; }
-.audit-source-controls, .audit-import-buttons, .audit-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.audit-source-controls { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.audit-source-controls, .audit-import-buttons, .audit-import-submit, .audit-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.audit-source-controls { flex: 0 0 auto; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--line); }
 .audit-source-controls > div { display: flex; gap: 6px; }
-.audit-source-controls select { max-width: 100%; }
-.audit-verdict { margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: .8rem; }
-.audit-import-panel, .audit-annotations { padding: 18px; overflow: auto; min-height: 0; }
-.audit-import-panel p, .audit-annotation p, .audit-check p { line-height: 1.55; overflow-wrap: anywhere; }
-.audit-import-panel label { display: block; margin-top: 18px; font-size: .8rem; }
-.audit-import-panel textarea { box-sizing: border-box; width: 100%; resize: vertical; padding: 10px; margin: 8px 0; font: .8rem/1.5 monospace; }
-.audit-actions { padding: 16px; }
-.audit-source-controls button, .audit-import-panel button, .audit-actions button, .audit-source-controls select {
-  padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; font-size: .78rem;
+.audit-source-controls select { min-width: 0; max-width: 100%; }
+.audit-verdict { flex: 0 0 auto; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .72rem; line-height: 1.4; }
+.audit-import-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow: hidden; }
+.audit-import-body { flex: 0 1 auto; min-height: 0; display: grid; gap: 12px; overflow: auto; }
+.audit-import-intro h3 { margin: 0 0 6px; font-size: .85rem; font-weight: 560; letter-spacing: -.015em; }
+.audit-import-intro p { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.5; overflow-wrap: anywhere; }
+.audit-paste-field { min-width: 0; display: grid; gap: 6px; }
+.audit-paste-field label { color: var(--muted); font-size: .72rem; }
+.audit-paste-field textarea {
+  width: 100%; min-width: 0; min-height: 96px; height: clamp(96px, 22vh, 180px); max-height: 220px;
+  margin: 0; padding: 10px; resize: vertical; overflow: auto; border: 1px solid var(--line-strong);
+  border-radius: var(--inspector-row-radius); color: var(--ink); background: var(--panel);
+  font: .73rem/1.5 "SFMono-Regular", Consolas, monospace; tab-size: 2;
+}
+.audit-import-submit { flex: 0 0 auto; }
+.audit-import-submit .run-button { min-height: 34px; font-size: .74rem; font-weight: 550; }
+.audit-annotations { flex: 1 1 auto; min-height: 0; padding: 14px; overflow: auto; font-size: .76rem; }
+.audit-actions { flex: 0 0 auto; padding: 0 11px 11px; }
+.audit-source-controls button, .audit-import-buttons button, .audit-import-submit button:not(.run-button), .audit-actions button, .audit-source-controls select {
+  min-height: 32px; padding: 6px 9px; border: 1px solid var(--line); border-radius: var(--inspector-row-radius);
+  background: var(--panel); color: var(--ink); cursor: pointer; font: inherit; font-size: .73rem; font-weight: 500;
 }
 .audit-source-controls button[aria-pressed="true"] { border-color: var(--ink); font-weight: 600; }
 .audit-actions button:disabled { opacity: .45; cursor: default; }
-.audit-note { font-size: .78rem; line-height: 1.5; color: var(--muted); padding: 0 12px; overflow-wrap: anywhere; }
-.audit-dimensions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 9px; margin: 12px; font-size: .78rem; }
+.audit-note { margin: 0; font-size: .72rem; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+.audit-dimensions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin: 0; font-size: .75rem; line-height: 1.4; }
 .audit-dimensions dd { margin: 0; overflow-wrap: anywhere; font-weight: 600; }
-.audit-annotation { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: .8rem; }
-.audit-annotation h3, .audit-check h3 { font-size: .85rem; }
-.audit-evidence-links { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
-.audit-proof { margin-top: 12px; font-size: .75rem; }
+.audit-annotation { padding: 12px 0; border-bottom: 1px solid var(--line); font-size: .76rem; }
+.audit-annotation h3, .audit-check h3 { margin: 0; font-size: .78rem; line-height: 1.4; font-weight: 550; }
+.audit-annotation p, .audit-check p { line-height: 1.45; overflow-wrap: anywhere; }
+.audit-evidence-links { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.audit-proof { margin-top: 8px; font-size: .72rem; }
 .audit-proof summary { cursor: pointer; }
-.audit-json { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .72rem; line-height: 1.5; }
-[hidden] { display: none !important; }
+.audit-json { max-width: 100%; margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .72rem; line-height: 1.5; }
 
 .source-view.audit-source { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+@media (max-width: 380px) {
+  .analysis-heading { height: auto; min-height: 62px; padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; }
+  .workflow-toggle { order: 3; flex-basis: 100%; margin-left: 0; }
+}

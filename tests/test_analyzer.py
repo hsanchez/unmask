@@ -1,4 +1,8 @@
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
+import z3
 
 from unmask.analyzer import SymbolicAnalyzer
 from unmask.models import (
@@ -10,6 +14,125 @@ from unmask.models import (
   RuleSemantics,
   SymbolicModel,
 )
+from unmask.solver import (
+  conjunction,
+  disjunction,
+  model_assignment,
+  negation,
+  require_bool_ref,
+)
+
+
+def test_shared_boolean_boundary_reports_the_invalid_type() -> None:
+  with pytest.raises(TypeError, match="expected a Z3 Boolean expression, got str"):
+    require_bool_ref("not a compiled Boolean")
+
+
+@pytest.mark.parametrize(
+  "operation,identity", [(conjunction, True), (disjunction, False)]
+)
+def test_empty_boolean_operations_keep_the_default_context(
+  operation: Callable[..., z3.BoolRef], identity: bool
+) -> None:
+  expression = operation()
+  assert expression.ctx == z3.main_ctx()
+  assert z3.is_true(z3.simplify(expression)) is identity
+
+
+@pytest.mark.parametrize(
+  "operation,identity", [(conjunction, True), (disjunction, False)]
+)
+def test_empty_boolean_operations_use_an_explicit_context(
+  operation: Callable[..., z3.BoolRef], identity: bool
+) -> None:
+  context = z3.Context()
+  expression = operation(context=context)
+  assert expression.ctx == context
+  solver = z3.Solver(ctx=context)
+  solver.add(expression)
+  assert solver.check() == (z3.sat if identity else z3.unsat)
+
+
+@pytest.mark.parametrize("operation", [conjunction, disjunction])
+def test_boolean_operations_accept_operands_in_the_explicit_context(
+  operation: Callable[..., z3.BoolRef],
+) -> None:
+  context = z3.Context()
+  symbol = z3.Bool("symbol", ctx=context)
+  expression = operation(symbol, context=context)
+  solver = z3.Solver(ctx=context)
+  solver.add(expression, negation(symbol))
+  assert expression.ctx == context
+  assert solver.check() == z3.unsat
+
+
+@pytest.mark.parametrize("operation", [conjunction, disjunction])
+def test_boolean_operations_reject_an_incompatible_explicit_context(
+  operation: Callable[..., z3.BoolRef],
+) -> None:
+  operand_context = z3.Context()
+  selected_context = z3.Context()
+  symbol = z3.Bool("symbol", ctx=operand_context)
+  with pytest.raises(z3.Z3Exception, match="[Cc]ontext mismatch"):
+    operation(symbol, context=selected_context)
+
+
+@pytest.mark.parametrize("operation", [conjunction, disjunction])
+def test_boolean_operations_reject_mixed_operand_contexts(
+  operation: Callable[..., z3.BoolRef],
+) -> None:
+  first_context = z3.Context()
+  second_context = z3.Context()
+  with pytest.raises(z3.Z3Exception, match="[Cc]ontext mismatch"):
+    operation(
+      z3.Bool("first", ctx=first_context), z3.Bool("second", ctx=second_context)
+    )
+
+
+@pytest.mark.parametrize(
+  "operation,identity", [(conjunction, True), (disjunction, False)]
+)
+def test_empty_boolean_operations_keep_parallel_contexts_isolated(
+  operation: Callable[..., z3.BoolRef], identity: bool
+) -> None:
+  def solve(_: int) -> bool:
+    context = z3.Context()
+    symbol = z3.Bool("symbol", ctx=context)
+    solver = z3.Solver(ctx=context)
+    solver.add(symbol, operation(context=context))
+    return solver.check() == z3.sat
+
+  with ThreadPoolExecutor(max_workers=2) as executor:
+    assert list(executor.map(solve, range(8))) == [identity] * 8
+
+
+@pytest.mark.parametrize(
+  "left,right", [(False, False), (False, True), (True, False), (True, True)]
+)
+def test_shared_boolean_operations_preserve_solver_context(
+  left: bool, right: bool
+) -> None:
+  context = z3.Context()
+  symbols = {
+    "left": z3.Bool("left", ctx=context),
+    "right": z3.Bool("right", ctx=context),
+  }
+  solver = z3.Solver(ctx=context)
+  solver.add(symbols["left"] == left, symbols["right"] == right)
+  solver.add(conjunction(disjunction(*symbols.values()), negation(symbols["right"])))
+  assert (solver.check() == z3.sat) == ((left or right) and not right)
+
+
+def test_shared_witness_completion_includes_unconstrained_symbols() -> None:
+  context = z3.Context()
+  symbols = {
+    "known": z3.Bool("known", ctx=context),
+    "unknown": z3.Bool("unknown", ctx=context),
+  }
+  solver = z3.Solver(ctx=context)
+  solver.add(symbols["known"])
+  assert solver.check() == z3.sat
+  assert model_assignment(solver.model(), symbols) == {"known": True, "unknown": False}
 
 
 def _guardrail(*rule_ids: str) -> Guardrail:
