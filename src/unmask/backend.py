@@ -1,8 +1,11 @@
-"""LLM judge backends used to extract a symbolic model from a guardrail."""
+"""LLM judge backends, plus a wrapper that logs and time-limits their calls."""
 
 from __future__ import annotations
 
+import itertools
+import logging
 import os
+import time
 from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING, Protocol, cast
@@ -14,6 +17,7 @@ if TYPE_CHECKING:
   from .config import TargetConfig
 
 _PROVIDER_TIMEOUT_SECONDS = 60
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -405,3 +409,62 @@ def create_backend(config: TargetConfig) -> JudgeBackend:
       f"unknown provider {config.provider!r}; available providers: {available}"
     ) from exc
   return backend_factory(config)
+
+
+class ObservedBackend:
+  """Enforce a shared deadline and log each call without leaking provider errors.
+
+  Used by proposed-fix generation, so its messages are worded for that workflow.
+  """
+
+  def __init__(
+    self,
+    backend: JudgeBackend,
+    *,
+    target: TargetConfig,
+    call_numbers: itertools.count[int],
+    deadline: float,
+  ) -> None:
+    self._backend: JudgeBackend = backend
+    self._target: TargetConfig = target
+    self._call_numbers: itertools.count[int] = call_numbers
+    self._deadline: float = deadline
+
+  def _log_fields(
+    self,
+    *,
+    call_number: int,
+    started: float,
+    max_tokens: int,
+  ) -> dict[str, object]:
+    return {
+      "provider": self._target.provider,
+      "model": self._target.judge_model,
+      "call_number": call_number,
+      "latency_ms": round((time.perf_counter() - started) * 1_000),
+      "requested_max_tokens": max_tokens,
+    }
+
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
+    if time.perf_counter() >= self._deadline:
+      raise RuntimeError("proposed-fix generation exceeded its time budget")
+    call_number: int = next(self._call_numbers)
+    started: float = time.perf_counter()
+    try:
+      response: JudgeResponse = self._backend.judge(prompt, max_tokens=max_tokens)
+    except Exception as exc:
+      logger.exception(
+        "proposed-fix model call failed",
+        extra=self._log_fields(
+          call_number=call_number, started=started, max_tokens=max_tokens
+        ),
+      )
+      raise RuntimeError("model provider call failed; see server logs") from exc
+    log_fields = self._log_fields(
+      call_number=call_number, started=started, max_tokens=max_tokens
+    )
+    log_fields["output_characters"] = len(response.text)
+    if response.usage is not None:
+      log_fields.update(response.usage.to_dict())
+    logger.info("proposed-fix model call completed", extra=log_fields)
+    return response

@@ -1,8 +1,19 @@
 import json
+from typing import cast
 
 import pytest
+import yaml
 
-from unmask.backend import JudgeResponse
+from tests.helpers import (
+  EXAMPLES,
+  ConflictingRulesBackend,
+  json_list,
+  json_object,
+  load_json_object,
+  target_config,
+)
+from unmask.backend import JudgeBackend, JudgeResponse
+from unmask.diagnosis import RegexManifest
 from unmask.models import GuardrailExample
 from unmask.repair import (
   CandidateEdit,
@@ -20,9 +31,16 @@ from unmask.repair import (
   merge_policy_examples,
   parse_candidate_edit,
   parse_taxonomy_policy_examples,
+  propose_fix,
+  regex_examples_retained,
   unified_specification_diff,
 )
-from unmask.service import validate_specification
+from unmask.scanning import RegexScanReport
+from unmask.service import (
+  bugs,
+  diagnose_specification,
+  validate_specification,
+)
 
 
 class StaticBackend:
@@ -34,6 +52,17 @@ class StaticBackend:
     del max_tokens
     self.prompts.append(prompt)
     return JudgeResponse(self.response)
+
+
+class SequenceBackend:
+  def __init__(self, responses: list[str]) -> None:
+    self.responses: list[str] = responses
+
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
+    del prompt, max_tokens
+    if not self.responses:
+      raise AssertionError("unexpected backend call")
+    return JudgeResponse(self.responses.pop(0))
 
 
 def test_candidate_generator_rejects_changes_to_unaffected_rules() -> None:
@@ -614,3 +643,868 @@ def test_proposed_fix_serializes_optional_fields_and_check_detail() -> None:
   assert payload["validationChecks"] == [
     {"code": "check", "label": "Check", "status": "failed", "detail": "why"}
   ]
+
+
+def test_empty_regex_example_set_is_vacuously_retained() -> None:
+  manifest = RegexManifest.from_text(
+    """\
+schema_version: 1
+kind: regex
+name: sample
+engine: python_re
+scope: agent_output
+rules:
+  - id: block-hack
+    action: block
+    pattern: hack
+"""
+  )
+  report = RegexScanReport(manifest=manifest, cases=(), taxonomy_supplied=False)
+
+  assert regex_examples_retained(report, report, target_example_hash=None) == (True, 0)
+
+
+def test_regex_proposed_fix_is_validated_before_it_is_returned() -> None:
+  text = (
+    "schema_version: 1\nkind: regex\nname: sample\nengine: python_re\n"
+    "scope: agent_output\nrules:\n"
+    "  - id: block-hack\n    action: block\n    pattern: hack\n"
+    "examples:\n  - content: harmless hack report\n"
+    "    expected_action: allow\n    reason: neutral reporting\n"
+    "  - content: malicious hack\n"
+    "    expected_action: block\n    reason: unsafe request\n"
+  )
+  baseline = bugs(text, model=target_config())
+  finding = next(item for item in baseline.findings if "block-hack" in item.rule_ids)
+  response = json.dumps(
+    {
+      "target_rule_ids": list(finding.rule_ids),
+      "replacement_rules": {
+        rule_id: (
+          {
+            "id": "block-hack",
+            "action": "block",
+            "pattern": "^malicious hack$",
+          }
+          if rule_id == "block-hack"
+          else {}
+        )
+        for rule_id in finding.rule_ids
+      },
+      "explanation": "Restrict blocking to the unsafe phrase.",
+    }
+  )
+  backend = SequenceBackend([response])
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=finding.id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  assert result.status == "validated", result.to_dict()
+  assert result.unified_diff is not None
+  assert "+    pattern: ^malicious hack$" in result.unified_diff
+  assert all(check.status == "passed" for check in result.validation_checks)
+
+
+def test_regex_diagnosis_fix_uses_labeled_incidents_as_regression_cases() -> None:
+  text = (
+    "schema_version: 1\nkind: regex\nname: sample\nengine: python_re\n"
+    "scope: agent_output\nrules:\n"
+    "  - id: block-hack\n    action: block\n    pattern: hack\n"
+  )
+  violations = json.dumps(
+    {
+      "violations": [
+        {
+          "context": "harmless hack report",
+          "location": 9,
+          "value": "hack",
+          "expected_outcome": "allow",
+          "expected_reason": "Neutral reporting.",
+        }
+      ]
+    }
+  )
+  baseline = diagnose_specification(text, violations)
+  candidate_response = json.dumps(
+    {
+      "target_rule_ids": ["block-hack"],
+      "replacement_rules": {
+        "block-hack": {
+          "id": "block-hack",
+          "action": "block",
+          "pattern": "^malicious hack$",
+        }
+      },
+      "explanation": "Restrict blocking to the unsafe phrase.",
+    }
+  )
+  backend = SequenceBackend([candidate_response])
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=violations,
+    workflow="diagnose",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  assert result.status == "validated", result.to_dict()
+  examples_check = next(
+    check for check in result.validation_checks if check.code == "examples_retained"
+  )
+  assert examples_check.label == "1 trusted cases retained"
+
+
+def test_regex_diagnosis_fix_rejects_new_scan_findings() -> None:
+  text = (
+    "schema_version: 1\nkind: regex\nname: sample\nengine: python_re\n"
+    "scope: agent_output\nrules:\n"
+    "  - id: block-hack\n    action: block\n    pattern: hack\n"
+    "examples:\n  - content: safe report\n"
+    "    expected_action: allow\n    reason: benign\n"
+  )
+  violations = json.dumps(
+    {
+      "violations": [
+        {
+          "context": "harmless hack report",
+          "location": 9,
+          "value": "hack",
+          "expected_outcome": "allow",
+          "expected_reason": "Neutral reporting.",
+        }
+      ]
+    }
+  )
+  baseline = diagnose_specification(text, violations)
+  backend = SequenceBackend(
+    [
+      json.dumps(
+        {
+          "target_rule_ids": ["block-hack"],
+          "replacement_rules": {
+            "block-hack": {
+              "id": "block-hack",
+              "action": "block",
+              "pattern": "safe",
+            }
+          },
+          "explanation": "Move the match away from the incident.",
+        }
+      )
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=violations,
+    workflow="diagnose",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  assert result.status == "unavailable"
+  no_new = next(
+    check for check in result.validation_checks if check.code == "no_new_findings"
+  )
+  assert no_new.status == "failed"
+  assert "new_findings" in result.unavailable_reasons
+
+
+def test_regex_diagnosis_retains_duplicate_content_cases_by_position() -> None:
+  text = (
+    "schema_version: 1\nkind: regex\nname: sample\nengine: python_re\n"
+    "scope: agent_output\nrules:\n"
+    "  - id: block-hack\n    action: block\n    pattern: hack\n"
+  )
+  violations = json.dumps(
+    {
+      "violations": [
+        {
+          "context": "hack",
+          "location": 0,
+          "value": "hack",
+          "expected_outcome": "block",
+          "expected_reason": "Unsafe request.",
+        },
+        {
+          "context": "hack",
+          "location": 0,
+          "value": "hack",
+          "expected_outcome": "allow",
+          "expected_reason": "Quoted example.",
+        },
+      ]
+    }
+  )
+  baseline = diagnose_specification(text, violations)
+  target_finding = baseline.findings[0]
+  backend = SequenceBackend(
+    [
+      json.dumps(
+        {
+          "target_rule_ids": ["block-hack"],
+          "replacement_rules": {
+            "block-hack": {
+              "id": "block-hack",
+              "action": "block",
+              "pattern": "^$",
+            }
+          },
+          "explanation": "Stop matching the quoted example.",
+        }
+      )
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=violations,
+    workflow="diagnose",
+    finding_id=target_finding.id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  examples_check = next(
+    check for check in result.validation_checks if check.code == "examples_retained"
+  )
+  assert result.status == "unavailable"
+  assert examples_check.status == "failed"
+
+
+def test_unvalidated_regex_candidate_text_is_not_returned() -> None:
+  text = (
+    "schema_version: 1\nkind: regex\nname: sample\nengine: python_re\n"
+    "scope: agent_output\nrules:\n"
+    "  - id: block-hack\n    action: block\n    pattern: hack\n"
+    "examples:\n  - content: harmless hack report\n"
+    "    expected_action: allow\n    reason: neutral reporting\n"
+  )
+  baseline = bugs(text, model=target_config())
+  unsafe_pattern = "hack|private-candidate-text"
+  backend = SequenceBackend(
+    [
+      json.dumps(
+        {
+          "target_rule_ids": ["block-hack"],
+          "replacement_rules": {
+            "block-hack": {
+              "id": "block-hack",
+              "action": "block",
+              "pattern": unsafe_pattern,
+            }
+          },
+          "explanation": "This does not repair the finding.",
+        }
+      )
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  assert result.status == "unavailable"
+  assert result.revised_specification is None
+  assert result.unified_diff is None
+  assert unsafe_pattern not in json.dumps(result.to_dict())
+  assert "target_finding_remains" in result.unavailable_reasons
+
+
+def test_regex_scan_retains_duplicate_content_cases_by_position() -> None:
+  text = (
+    "schema_version: 1\nkind: regex\nname: sample\nengine: python_re\n"
+    "scope: agent_output\nrules:\n"
+    "  - id: block-hack\n    action: block\n    pattern: hack\n"
+    "examples:\n"
+    "  - content: malicious hack\n    expected_action: block\n    reason: Unsafe.\n"
+    "  - content: malicious hack\n    expected_action: block\n    reason: Unsafe.\n"
+    "  - content: harmless hack report\n"
+    "    expected_action: allow\n    reason: Neutral reporting.\n"
+  )
+  baseline = bugs(text, model=target_config())
+  backend = SequenceBackend(
+    [
+      json.dumps(
+        {
+          "target_rule_ids": ["block-hack"],
+          "replacement_rules": {
+            "block-hack": {
+              "id": "block-hack",
+              "action": "block",
+              "pattern": "^malicious hack$",
+            }
+          },
+          "explanation": "Restrict blocking to the unsafe phrase.",
+        }
+      )
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  examples_check = next(
+    check for check in result.validation_checks if check.code == "examples_retained"
+  )
+  assert result.status == "validated", result.to_dict()
+  assert examples_check.status == "passed"
+  assert examples_check.label == "3 trusted cases retained"
+
+
+@pytest.mark.parametrize("bug_type", ["over_strict", "contradiction", "ambiguity"])
+def test_regex_proposed_fix_supports_each_finding_class(bug_type: str) -> None:
+  text = (EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+  baseline = bugs(text, model=target_config())
+  finding = next(item for item in baseline.findings if item.bug_type == bug_type)
+  manifest = json_object(cast("object", yaml.safe_load(text)))
+  manifest_rules = {
+    json_object(rule)["id"]: json_object(rule) for rule in json_list(manifest["rules"])
+  }
+  replacements = {
+    rule_id: dict(manifest_rules[rule_id]) for rule_id in finding.rule_ids
+  }
+  if bug_type == "over_strict":
+    replacements["block-investment-term"]["pattern"] = r"\AYou should invest\b"
+  elif bug_type == "contradiction":
+    replacements["allow-how-to-education"]["pattern"] = r"(?<=how to )trade\b(?! Acme)"
+  else:
+    interpretations = json_list(
+      replacements["first-time-investor-scope"]["interpretations"]
+    )
+    json_object(interpretations[1])["pattern"] = json_object(interpretations[0])[
+      "pattern"
+    ]
+  backend = SequenceBackend(
+    [
+      json.dumps(
+        {
+          "target_rule_ids": list(finding.rule_ids),
+          "replacement_rules": replacements,
+          "explanation": f"Repair the {bug_type} finding.",
+        }
+      )
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="regexes.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=finding.id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  assert result.status == "validated", result.to_dict()
+
+
+def test_natural_proposed_fix_requires_trusted_examples() -> None:
+  text = (
+    "name: sample\nsystem_prompt: Be helpful.\nrules:\n"
+    "  - Block all advice.\n  - Allow safe advice.\n"
+  )
+  baseline = bugs(
+    text,
+    model=target_config(),
+    backend_factory=lambda config: ConflictingRulesBackend(),
+  )
+  backend = ConflictingRulesBackend()
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  assert result.status == "unavailable"
+  assert result.unavailable_reasons == ("insufficient_evidence",)
+
+
+def _symbolic_response(*, repaired: bool) -> str:
+  condition_value = True
+  safe_value = False if repaired else True
+  return json.dumps(
+    {
+      "predicates": {"is_recommendation": "content recommends an investment"},
+      "safe_condition": [[{"predicate": "is_recommendation", "value": safe_value}]],
+      "rules": [
+        {
+          "rule_id": "rule:1",
+          "decision": "block",
+          "condition": [[{"predicate": "is_recommendation", "value": condition_value}]],
+          "rationale": "Block recommendations.",
+        }
+      ],
+      "exclusions": [],
+      "ambiguities": [],
+    }
+  )
+
+
+def test_natural_proposed_fix_requires_stable_extraction_and_examples() -> None:
+  text = (
+    "name: sample\nsystem_prompt: Be helpful.\nrules:\n"
+    "  - Block any mention of investing.\n"
+    "examples:\n"
+    "  - content: Anthropic will invest.\n    should_block: false\n"
+    "    reasoning: Neutral report.\n"
+    "  - content: You should invest.\n    should_block: true\n"
+    "    reasoning: Recommendation.\n"
+  )
+  target = target_config()
+  baseline_backend = SequenceBackend([_symbolic_response(repaired=False)])
+  baseline = bugs(text, model=target, backend_factory=lambda config: baseline_backend)
+  candidate_response = json.dumps(
+    {
+      "target_rule_ids": ["rule:1"],
+      "replacement_rules": {
+        "rule:1": (
+          "Block recommendations that the user make a specific investment. "
+          "Allow neutral reporting about third-party investments."
+        )
+      },
+      "explanation": "Distinguish recommendations from neutral reporting.",
+    }
+  )
+  evaluation_response = json.dumps(
+    {
+      "results": [
+        {"index": 0, "should_block": False, "rationale": "Neutral report."},
+        {"index": 1, "should_block": True, "rationale": "Recommendation."},
+      ]
+    }
+  )
+  backend = SequenceBackend(
+    [
+      _symbolic_response(repaired=False),
+      candidate_response,
+      _symbolic_response(repaired=True),
+      _symbolic_response(repaired=True),
+      evaluation_response,
+      evaluation_response,
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target,
+    backend_factory=lambda config: backend,
+  )
+
+  assert result.status == "validated", result.to_dict()
+  assert result.unified_diff is not None
+  assert "Allow neutral reporting" in result.unified_diff
+  assert {check.code for check in result.validation_checks} >= {
+    "stable_extraction",
+    "examples_retained",
+    "target_removed",
+    "no_new_findings",
+  }
+
+
+def test_natural_fix_rejects_changed_predicate_meaning_as_unstable() -> None:
+  text = (
+    "name: sample\nsystem_prompt: Be helpful.\nrules:\n"
+    "  - Block any mention of investing.\n"
+    "examples:\n"
+    "  - content: Neutral report.\n    should_block: false\n"
+    "    reasoning: Neutral.\n"
+  )
+  target = target_config()
+  baseline_backend = SequenceBackend([_symbolic_response(repaired=False)])
+  baseline = bugs(text, model=target, backend_factory=lambda config: baseline_backend)
+  candidate_response = json.dumps(
+    {
+      "target_rule_ids": ["rule:1"],
+      "replacement_rules": {"rule:1": "Block investment recommendations."},
+      "explanation": "Narrow the rule.",
+    }
+  )
+  changed_model = load_json_object(_symbolic_response(repaired=True))
+  json_object(changed_model["predicates"])["is_recommendation"] = (
+    "content mentions an investment"
+  )
+  evaluation_response = json.dumps(
+    {"results": [{"index": 0, "should_block": False, "rationale": "Neutral."}]}
+  )
+  backend = SequenceBackend(
+    [
+      _symbolic_response(repaired=False),
+      candidate_response,
+      _symbolic_response(repaired=True),
+      json.dumps(changed_model),
+      evaluation_response,
+      evaluation_response,
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target,
+    backend_factory=lambda config: backend,
+  )
+
+  stability_check = next(
+    check for check in result.validation_checks if check.code == "stable_extraction"
+  )
+  assert result.status == "unavailable"
+  assert stability_check.status == "failed"
+  assert "unstable_extraction" in result.unavailable_reasons
+
+
+def _natural_finding_model(bug_type: str, *, repaired: bool) -> str:
+  rules = [
+    {
+      "rule_id": "rule:1",
+      "decision": "block",
+      "condition": [
+        [
+          {
+            "predicate": "is_recommendation",
+            "value": bug_type != "over_strict" or repaired,
+          }
+        ]
+      ],
+      "rationale": "Block recommendations.",
+    }
+  ]
+  if bug_type == "contradiction":
+    rules.append(
+      {
+        "rule_id": "rule:2",
+        "decision": "allow",
+        "condition": [[{"predicate": "is_recommendation", "value": not repaired}]],
+        "rationale": "Allow recommendations.",
+      }
+    )
+  ambiguities: list[dict[str, object]] = []
+  if bug_type == "ambiguity" and not repaired:
+    ambiguities.append(
+      {
+        "rule_id": "rule:1",
+        "category": "undefined_threshold",
+        "excerpt": "substantial",
+        "rationale": "No threshold is defined.",
+        "interpretation_a": {
+          "label": "all recommendations",
+          "decision": "block",
+          "condition": [[{"predicate": "is_recommendation", "value": True}]],
+          "rationale": "Apply broadly.",
+        },
+        "interpretation_b": {
+          "label": "non-recommendations",
+          "decision": "block",
+          "condition": [[{"predicate": "is_recommendation", "value": False}]],
+          "rationale": "Apply narrowly.",
+        },
+      }
+    )
+  return json.dumps(
+    {
+      "predicates": {"is_recommendation": "content recommends an investment"},
+      "safe_condition": [[{"predicate": "is_recommendation", "value": False}]],
+      "rules": rules,
+      "exclusions": [],
+      "ambiguities": ambiguities,
+    }
+  )
+
+
+@pytest.mark.parametrize("bug_type", ["over_strict", "contradiction", "ambiguity"])
+def test_natural_proposed_fix_supports_each_finding_class(bug_type: str) -> None:
+  rules = ["Block substantial investment advice."]
+  if bug_type == "contradiction":
+    rules.append("Allow investment advice.")
+  rule_lines = "".join(f"  - {rule}\n" for rule in rules)
+  text = f"""\
+name: sample
+system_prompt: Be helpful.
+rules:
+{rule_lines}examples:
+  - content: Neutral report.
+    should_block: false
+    reasoning: Neutral.
+  - content: You should invest.
+    should_block: true
+    reasoning: Recommendation.
+"""
+  target = target_config()
+  baseline_backend = SequenceBackend([_natural_finding_model(bug_type, repaired=False)])
+  baseline = bugs(text, model=target, backend_factory=lambda config: baseline_backend)
+  finding = next(item for item in baseline.findings if item.bug_type == bug_type)
+  candidate_response = json.dumps(
+    {
+      "target_rule_ids": list(finding.rule_ids),
+      "replacement_rules": {
+        rule_id: f"Clarify the intended boundary for {rule_id}."
+        for rule_id in finding.rule_ids
+      },
+      "explanation": f"Repair the {bug_type} finding.",
+    }
+  )
+  evaluation_response = json.dumps(
+    {
+      "results": [
+        {"index": 0, "should_block": False, "rationale": "Neutral."},
+        {"index": 1, "should_block": True, "rationale": "Recommendation."},
+      ]
+    }
+  )
+  backend = SequenceBackend(
+    [
+      _natural_finding_model(bug_type, repaired=False),
+      candidate_response,
+      _natural_finding_model(bug_type, repaired=True),
+      _natural_finding_model(bug_type, repaired=True),
+      evaluation_response,
+      evaluation_response,
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="guardrail.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=finding.id,
+    expected_content_hash=baseline.content_hash,
+    target=target,
+    backend_factory=lambda config: backend,
+  )
+
+  assert result.status == "validated", result.to_dict()
+
+
+def test_diagnosis_proposed_fix_requires_violations() -> None:
+  text = (EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+
+  with pytest.raises(ValueError, match="violations are required"):
+    _ = propose_fix(
+      text,
+      specification_name="regexes.yaml",
+      taxonomy_text=None,
+      violations_text=None,
+      workflow="diagnose",
+      finding_id="finding",
+      expected_content_hash="hash",
+      target=target_config(),
+    )
+
+
+def test_regex_proposed_fix_with_an_invalid_pattern_is_an_invalid_candidate() -> None:
+  text = (EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+  baseline = bugs(text, model=target_config())
+  finding = next(item for item in baseline.findings if item.bug_type == "over_strict")
+  manifest = json_object(cast("object", yaml.safe_load(text)))
+  rules = {
+    json_object(rule)["id"]: json_object(rule) for rule in json_list(manifest["rules"])
+  }
+  backend = SequenceBackend(
+    [
+      json.dumps(
+        {
+          "target_rule_ids": list(finding.rule_ids),
+          "replacement_rules": {
+            rule_id: {**rules[rule_id], "pattern": "(unclosed"}
+            for rule_id in finding.rule_ids
+          },
+          "explanation": "Break the pattern.",
+        }
+      )
+    ]
+  )
+
+  result = propose_fix(
+    text,
+    specification_name="regexes.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=finding.id,
+    expected_content_hash=baseline.content_hash,
+    target=target_config(),
+    backend_factory=lambda config: backend,
+  )
+
+  validity = next(
+    check for check in result.validation_checks if check.code == "valid_specification"
+  )
+  assert result.status == "unavailable"
+  assert validity.status == "failed"
+  assert result.unavailable_reasons == ("invalid_candidate",)
+
+
+OVER_STRICT_TEXT = """\
+name: sample
+system_prompt: Be helpful.
+rules:
+  - Block any mention of investing.
+examples:
+  - content: Neutral report.
+    should_block: false
+    reasoning: Neutral.
+"""
+
+
+NEUTRAL_EVALUATION = json.dumps(
+  {"results": [{"index": 0, "should_block": False, "rationale": "Neutral."}]}
+)
+
+
+def _propose_over_strict_fix(
+  revision_responses: list[str],
+) -> tuple[ProposedFix, JudgeBackend]:
+  target = target_config()
+  baseline_backend = SequenceBackend([_symbolic_response(repaired=False)])
+  baseline = bugs(
+    OVER_STRICT_TEXT, model=target, backend_factory=lambda config: baseline_backend
+  )
+  candidate = json.dumps(
+    {
+      "target_rule_ids": ["rule:1"],
+      "replacement_rules": {"rule:1": "Block investment recommendations."},
+      "explanation": "Narrow the rule.",
+    }
+  )
+  backend = SequenceBackend(
+    [_symbolic_response(repaired=False), candidate, *revision_responses]
+  )
+  result = propose_fix(
+    OVER_STRICT_TEXT,
+    specification_name="sample.yaml",
+    taxonomy_text=None,
+    violations_text=None,
+    workflow="scan",
+    finding_id=baseline.findings[0].id,
+    expected_content_hash=baseline.content_hash,
+    target=target,
+    backend_factory=lambda config: backend,
+  )
+  return result, backend
+
+
+def test_natural_fix_that_leaves_the_target_finding_is_unavailable() -> None:
+  unrepaired = _symbolic_response(repaired=False)
+
+  result, _ = _propose_over_strict_fix(
+    [unrepaired, unrepaired, NEUTRAL_EVALUATION, NEUTRAL_EVALUATION]
+  )
+
+  assert result.status == "unavailable"
+  assert "target_finding_remains" in result.unavailable_reasons
+
+
+def test_natural_fix_that_introduces_a_finding_is_unavailable() -> None:
+  ambiguous = _natural_finding_model("ambiguity", repaired=False)
+
+  result, _ = _propose_over_strict_fix(
+    [ambiguous, ambiguous, NEUTRAL_EVALUATION, NEUTRAL_EVALUATION]
+  )
+
+  assert result.status == "unavailable"
+  assert "new_findings" in result.unavailable_reasons
+
+
+def test_natural_fix_with_an_unparseable_revision_extraction_raises() -> None:
+  with pytest.raises(RepairGenerationError, match="semantic extraction"):
+    _ = _propose_over_strict_fix(["not json"] * 6)
+
+
+def test_natural_fix_with_incomplete_example_evaluation_raises() -> None:
+  repaired = _symbolic_response(repaired=True)
+  empty_evaluation = json.dumps({"results": []})
+
+  with pytest.raises(RepairGenerationError, match="example evaluation"):
+    _ = _propose_over_strict_fix([repaired, repaired, empty_evaluation])
+
+
+@pytest.mark.parametrize(
+  "overrides,message",
+  [
+    ({"expected_content_hash": "stale"}, "analysis inputs changed"),
+    ({"finding_id": "missing"}, "finding is no longer present"),
+  ],
+)
+def test_proposed_fix_rejects_stale_analysis_bindings(
+  overrides: dict[str, str], message: str
+) -> None:
+  text = (EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+  baseline = bugs(text, model=target_config())
+  arguments = {
+    "finding_id": baseline.findings[0].id,
+    "expected_content_hash": baseline.content_hash,
+  }
+  arguments.update(overrides)
+
+  with pytest.raises(LookupError, match=message):
+    _ = propose_fix(
+      text,
+      specification_name="regexes.yaml",
+      taxonomy_text=None,
+      violations_text=None,
+      workflow="scan",
+      finding_id=arguments["finding_id"],
+      expected_content_hash=arguments["expected_content_hash"],
+      target=target_config(),
+    )

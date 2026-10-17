@@ -25,14 +25,13 @@ from .judge import (
   audit_judge_case,
   validate_audit_case,
 )
-from .repair import PROPOSED_FIX_SCHEMA_VERSION, RepairGenerationError
+from .repair import PROPOSED_FIX_SCHEMA_VERSION, RepairGenerationError, propose_fix
 from .service import (
   DEFAULT_MODELS,
   PROVIDER_MODELS,
   ScanResult,
   bugs,
   diagnose_specification,
-  propose_fix,
   validate_specification,
 )
 

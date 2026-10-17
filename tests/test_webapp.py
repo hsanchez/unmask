@@ -2,7 +2,6 @@ import json
 import re
 from html.parser import HTMLParser
 from importlib.metadata import PackageNotFoundError
-from pathlib import Path
 from threading import BoundedSemaphore
 from typing import cast, override
 
@@ -14,6 +13,7 @@ from werkzeug.datastructures import Headers
 from werkzeug.test import TestResponse
 
 from tests.helpers import (
+  EXAMPLES,
   json_object,
   replay_object,
   replay_text,
@@ -32,8 +32,6 @@ from unmask.repair import (
   ValidationStatus,
 )
 from unmask.webapp import MAX_REQUEST_BYTES, create_app, run_local_server
-
-_EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
 
 @pytest.fixture
@@ -272,8 +270,8 @@ def test_regex_scan_runs_without_external_provider(application: Flask) -> None:
 
 
 def test_regex_diagnosis_runs_without_external_provider(application: Flask) -> None:
-  specification = (_EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
-  violations = (_EXAMPLES / "violations.json").read_text(encoding="utf-8")
+  specification = (EXAMPLES / "regexes.yaml").read_text(encoding="utf-8")
+  violations = (EXAMPLES / "violations.json").read_text(encoding="utf-8")
 
   response = application.test_client().post(
     "/api/v1/diagnoses",

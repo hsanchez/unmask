@@ -10,6 +10,8 @@ from typing import cast
 
 type Decision = TypingLiteral["allow", "block"]
 type BugType = TypingLiteral["over_strict", "contradiction", "ambiguity"]
+type SpecificationKind = TypingLiteral["natural_language", "regex"]
+type AnalysisWorkflow = TypingLiteral["scan", "diagnose"]
 
 
 def canonical_json_hash(payload: dict[str, object]) -> str:

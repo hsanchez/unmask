@@ -9,14 +9,13 @@ import pytest
 
 import unmask
 import unmask.cli as cli_module
+from tests.helpers import EXAMPLES
 from unmask.backend import JudgeResponse
 from unmask.cli import main
 from unmask.config import TargetConfig, load_guardrail
 from unmask.diagnosis import RegexManifest
 from unmask.importer import load_violations
 from unmask.scanning import load_taxonomy_regex_examples
-
-EXAMPLES_DIRECTORY = Path(__file__).parent.parent / "examples"
 
 
 def _read_json_mapping(path: Path) -> dict[str, object]:
@@ -144,7 +143,7 @@ class CatalogBackend:
 
 
 def test_natural_language_example_catalog_loads() -> None:
-  guardrail = load_guardrail(EXAMPLES_DIRECTORY / "guardrail.yaml")
+  guardrail = load_guardrail(EXAMPLES / "guardrail.yaml")
 
   assert guardrail.name == "financial-information-policy"
   assert len(guardrail.rules) == 4
@@ -152,7 +151,7 @@ def test_natural_language_example_catalog_loads() -> None:
 
 
 def test_regex_example_catalog_loads() -> None:
-  manifest = RegexManifest.from_yaml(EXAMPLES_DIRECTORY / "regexes.yaml")
+  manifest = RegexManifest.from_yaml(EXAMPLES / "regexes.yaml")
 
   assert manifest.name == "financial-information-policy"
   assert len(manifest.rules) == 4
@@ -161,7 +160,7 @@ def test_regex_example_catalog_loads() -> None:
 
 
 def test_taxonomy_contributes_a_distinct_regex_example() -> None:
-  examples = load_taxonomy_regex_examples(EXAMPLES_DIRECTORY / "taxonomy.yaml")
+  examples = load_taxonomy_regex_examples(EXAMPLES / "taxonomy.yaml")
 
   assert len(examples) == 1
   assert examples[0].source == "taxonomy"
@@ -169,7 +168,7 @@ def test_taxonomy_contributes_a_distinct_regex_example() -> None:
 
 
 def test_violation_catalog_loads_three_canonical_incidents() -> None:
-  violations = load_violations(EXAMPLES_DIRECTORY / "violations.json")
+  violations = load_violations(EXAMPLES / "violations.json")
 
   assert [violation.value for violation in violations] == ["invest", "trade", "buy"]
   assert all(violation.expected_reason for violation in violations)
@@ -183,9 +182,9 @@ def test_regex_scan_catalog_demonstrates_each_defect(
   exit_code = main(
     [
       "scan",
-      str(EXAMPLES_DIRECTORY / "regexes.yaml"),
+      str(EXAMPLES / "regexes.yaml"),
       "--taxonomy",
-      str(EXAMPLES_DIRECTORY / "taxonomy.yaml"),
+      str(EXAMPLES / "taxonomy.yaml"),
       "--output",
       str(output_directory),
     ]
@@ -220,8 +219,8 @@ def test_diagnosis_catalog_isolates_one_defect_per_incident(tmp_path: Path) -> N
   exit_code = main(
     [
       "diagnose",
-      str(EXAMPLES_DIRECTORY / "regexes.yaml"),
-      str(EXAMPLES_DIRECTORY / "violations.json"),
+      str(EXAMPLES / "regexes.yaml"),
+      str(EXAMPLES / "violations.json"),
       "--output",
       str(output_directory),
     ]
@@ -258,9 +257,9 @@ def test_natural_language_catalog_demonstrates_each_defect(
   exit_code = main(
     [
       "scan",
-      str(EXAMPLES_DIRECTORY / "guardrail.yaml"),
+      str(EXAMPLES / "guardrail.yaml"),
       "--taxonomy",
-      str(EXAMPLES_DIRECTORY / "taxonomy.yaml"),
+      str(EXAMPLES / "taxonomy.yaml"),
       "--output",
       str(output_directory),
     ]
@@ -288,7 +287,7 @@ def test_local_api_examples_run_outside_the_checkout(
   script: str, tmp_path: Path
 ) -> None:
   result = subprocess.run(
-    [sys.executable, str(EXAMPLES_DIRECTORY / script)],
+    [sys.executable, str(EXAMPLES / script)],
     cwd=tmp_path,
     check=True,
     capture_output=True,
@@ -330,9 +329,7 @@ def test_model_api_example_uses_the_public_api_without_live_calls(
     )
 
   monkeypatch.setattr(unmask, "bugs", run_bugs)
-  _ = runpy.run_path(
-    str(EXAMPLES_DIRECTORY / "bugs_with_model.py"), run_name="__main__"
-  )
+  _ = runpy.run_path(str(EXAMPLES / "bugs_with_model.py"), run_name="__main__")
   assert len(calls) == 1
   assert calls[0].provider == "openai"
   output = capsys.readouterr().out

@@ -1,10 +1,19 @@
+import itertools
+import logging
+import time
+
 import pytest
 
 import unmask.backend as backend_module
+from tests.helpers import target_config
 from unmask.backend import (
   AnthropicBackend,
   GeminiBackend,
+  JudgeBackend,
+  JudgeResponse,
+  ObservedBackend,
   OpenAIBackend,
+  TokenUsage,
   create_backend,
 )
 from unmask.config import TargetConfig
@@ -415,3 +424,55 @@ class TestAnthropicBackendJudge:
 
     with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
       _ = AnthropicBackend(_target(provider="anthropic"))
+
+
+class _FailingBackend:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
+    del prompt, max_tokens
+    raise ConnectionError("secret provider detail")
+
+
+class _UsageBackend:
+  def judge(self, prompt: str, *, max_tokens: int = 8192) -> JudgeResponse:
+    del prompt, max_tokens
+    return JudgeResponse("{}", TokenUsage(3, 4, 7))
+
+
+def _observe(backend: JudgeBackend, *, deadline: float) -> ObservedBackend:
+  return ObservedBackend(
+    backend,
+    target=target_config(),
+    call_numbers=itertools.count(1),
+    deadline=deadline,
+  )
+
+
+class TestObservedBackend:
+  def test_deadline_prevents_another_provider_call(self) -> None:
+    observed = _observe(_UsageBackend(), deadline=0)
+
+    with pytest.raises(RuntimeError, match="exceeded its time budget"):
+      _ = observed.judge("prompt")
+
+  def test_provider_failures_are_reported_without_provider_detail(
+    self, caplog: pytest.LogCaptureFixture
+  ) -> None:
+    observed = _observe(_FailingBackend(), deadline=time.perf_counter() + 60)
+
+    with pytest.raises(RuntimeError, match="see server logs") as caught:
+      _ = observed.judge("prompt")
+
+    assert "secret provider detail" not in str(caught.value)
+    assert any("secret provider detail" in str(r.exc_info) for r in caplog.records)
+
+  def test_model_call_logs_include_token_usage(
+    self, caplog: pytest.LogCaptureFixture
+  ) -> None:
+    observed = _observe(_UsageBackend(), deadline=time.perf_counter() + 60)
+
+    with caplog.at_level(logging.INFO, logger="unmask.backend"):
+      _ = observed.judge("prompt")
+
+    record = caplog.records[-1]
+    assert record.__dict__["total_tokens"] == 7
+    assert record.__dict__["output_characters"] == 2
