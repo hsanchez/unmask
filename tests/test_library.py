@@ -393,7 +393,7 @@ def test_cli_library_and_web_produce_identical_judge_reports(
 
   monkeypatch.setattr("unmask.cli._load_environment", fail_on_environment)
 
-  assert main(["audit-judge", str(source), "--output", str(output)]) == 0
+  assert main(["adherence", str(source), "--output", str(output)]) == 0
 
   expected = audit_judge_case(replay_text())
   assert load_json_object(output.read_text(encoding="utf-8")) == expected

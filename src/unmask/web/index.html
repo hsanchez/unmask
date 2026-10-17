@@ -75,7 +75,7 @@
               <button id="clear-button" class="text-button" type="button">Clear imported</button>
             </div>
             <div id="import-list" class="study-list" role="list"></div>
-            <p id="imports-empty" class="empty-note">Use + for a YAML specification, or choose Audit judge.</p>
+            <p id="imports-empty" class="empty-note">Use + for a YAML specification, or choose Adherence.</p>
           </section>
         </div>
         <p id="storage-status" class="storage-status">Starting…</p>
@@ -117,7 +117,7 @@
             </div>
             <p id="audit-verdict" class="audit-verdict" hidden></p>
             <div id="audit-source-controls" class="audit-source-controls" hidden>
-              <div role="group" aria-label="Audit case view">
+              <div role="group" aria-label="Adherence case view">
                 <button id="audit-sources-button" type="button" aria-pressed="true">Sources</button>
                 <button id="audit-annotations-button" type="button" aria-pressed="false">Annotations</button>
               </div>
@@ -174,7 +174,7 @@
               type="button"
               aria-describedby="workflow-note"
             >Diagnose</button>
-            <button id="audit-mode" class="workflow-button" type="button" aria-pressed="false">Audit judge</button>
+            <button id="audit-mode" class="workflow-button" type="button" aria-pressed="false">Adherence</button>
           </div>
           <button id="analysis-close" class="drawer-close" type="button" aria-label="Close analysis">×</button>
         </div>
@@ -256,8 +256,8 @@
     </main>
 
     <button id="drawer-overlay" class="drawer-overlay" type="button" aria-label="Close open panel" hidden></button>
-    <script src="/assets/audit-state.js?v=1" defer></script>
-    <script src="/assets/audit.js?v=4" defer></script>
-    <script src="/assets/app.js?v=22" defer></script>
+    <script src="/assets/audit-state.js?v=2" defer></script>
+    <script src="/assets/audit.js?v=5" defer></script>
+    <script src="/assets/app.js?v=23" defer></script>
   </body>
 </html>

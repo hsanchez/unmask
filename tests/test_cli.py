@@ -500,7 +500,7 @@ class TestMainAuditJudge:
     case = tmp_path / "bad.json"
     _ = case.write_text('{"bad":', encoding="utf-8")
 
-    assert main(["audit-judge", str(case)]) == 1
+    assert main(["adherence", str(case)]) == 1
     assert "invalid JSON" in capsys.readouterr().err
 
   def test_prints_the_report_when_no_output_file_is_given(
@@ -508,7 +508,7 @@ class TestMainAuditJudge:
   ) -> None:
     case = REPLAY_FIXTURES / "A_correct_procedurally_adherent.json"
 
-    assert main(["audit-judge", str(case)]) == 0
+    assert main(["adherence", str(case)]) == 0
 
     report = load_json_object(capsys.readouterr().out)
     assert report["status"] == "completed"
@@ -563,3 +563,92 @@ class TestMainScanInvariants:
 
     assert exit_code == 1
     assert message in capsys.readouterr().err
+
+
+class TestInputErrorAttribution:
+  def test_scan_names_the_specification_file_for_invalid_rules(
+    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    specification = write_yaml(
+      tmp_path / "regexes.yaml",
+      {
+        "kind": "regex",
+        "name": "sample",
+        "rules": [{"id": "a", "action": "block", "pattern": "("}],
+      },
+    )
+
+    assert main(["scan", str(specification), "--output", str(tmp_path / "out")]) == 1
+
+    error = capsys.readouterr().err
+    assert error.startswith(f"error: {specification}: invalid regex for a")
+
+  def test_scan_reports_the_line_and_column_of_yaml_syntax_errors(
+    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    specification = tmp_path / "broken.yaml"
+    _ = specification.write_text("name: s\nrules: [\n", encoding="utf-8")
+
+    assert main(["scan", str(specification), "--output", str(tmp_path / "out")]) == 1
+
+    assert capsys.readouterr().err.startswith(f"error: {specification}:3:1: ")
+
+  def test_scan_names_the_taxonomy_file_for_yaml_syntax_errors(
+    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    taxonomy = tmp_path / "taxonomy.yaml"
+    _ = taxonomy.write_text("regex_examples: [\n", encoding="utf-8")
+
+    exit_code = main(
+      [
+        "scan",
+        str(_write_regex_manifest(tmp_path)),
+        "--taxonomy",
+        str(taxonomy),
+        "--output",
+        str(tmp_path / "out"),
+      ]
+    )
+
+    assert exit_code == 1
+    assert f"error: {taxonomy}:" in capsys.readouterr().err
+
+  def test_diagnose_names_the_violations_file(
+    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    violations = tmp_path / "violations.json"
+    _ = violations.write_text('{"violations": []}', encoding="utf-8")
+
+    exit_code = main(
+      [
+        "diagnose",
+        str(_write_regex_manifest(tmp_path)),
+        str(violations),
+        "--output",
+        str(tmp_path / "out"),
+      ]
+    )
+
+    assert exit_code == 1
+    assert f"error: {violations}: " in capsys.readouterr().err
+
+  def test_adherence_names_the_case_file(
+    self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+  ) -> None:
+    case = tmp_path / "case.json"
+    _ = case.write_text("{}", encoding="utf-8")
+
+    assert main(["adherence", str(case)]) == 1
+
+    assert f"error: {case}: " in capsys.readouterr().err
+
+  def test_invalid_specification_fails_before_any_provider_call(
+    self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+  ) -> None:
+    def fail_on_provider(config: TargetConfig) -> FakeBackend:
+      pytest.fail(f"provider called for {config.judge_model}")
+
+    monkeypatch.setattr(cli_module, "create_backend", fail_on_provider)
+    specification = write_yaml(tmp_path / "guardrail.yaml", {"name": "x"})
+
+    assert main(["scan", str(specification), "--output", str(tmp_path / "out")]) == 1

@@ -20,7 +20,7 @@ const UnmaskAudit = {
   input(text) {
     const parsed = JSON.parse(text);
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("An audit case or report must be a JSON object.");
+      throw new Error("A replay case or report must be a JSON object.");
     }
     if (parsed.workflow === "audit_judge" && parsed.case) {
       return {text: JSON.stringify(parsed.case, null, 2), historical: true};

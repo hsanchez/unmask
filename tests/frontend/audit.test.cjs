@@ -108,16 +108,16 @@ test('new case opens an importer while retaining the saved active case', async (
 test('audit import uses concise guidance without repeating the input requirements', () => {
   const app = studio();
   app.run('startAuditImport()');
-  assert.equal(app.nodes.get('analysis-empty').textContent, 'Local audit · no model provider');
-  assert.equal(app.nodes.get('finding-list').textContent, 'Load a case to view audit results.');
+  assert.equal(app.nodes.get('analysis-empty').textContent, 'Local check · no model provider');
+  assert.equal(app.nodes.get('finding-list').textContent, 'Load a case to view adherence results.');
   assert.equal(app.nodes.get('audit-source-controls').hidden, true);
 });
 
 test('loaded audit uses compact labels and restores specification headings when leaving', async () => {
   const app = studio(); await app.run('importAuditText(fixture)');
-  assert.equal(app.nodes.get('provider-disclosure').textContent, 'Local audit · no model provider');
+  assert.equal(app.nodes.get('provider-disclosure').textContent, 'Local check · no model provider');
   assert.equal(app.nodes.get('audit-verdict').textContent, `Judge verdict: ${JSON.parse(fixture).verdict} · read-only`);
-  assert.equal(app.nodes.get('finding-list').textContent, 'Run audit to inspect this case.');
+  assert.equal(app.nodes.get('finding-list').textContent, 'Check adherence to inspect this case.');
   app.run('configureAuditWorkspace(false)');
   assert.equal(app.nodes.get('source-heading').textContent, 'specification(source)');
   assert.equal(app.nodes.get('findings-heading').textContent, 'specification bugs(structure)');
@@ -428,7 +428,7 @@ test('report import uses case only and requires a fresh audit', async () => {
   const app = studio();
   await app.run('importAuditText(JSON.stringify(report(fixture)))');
   assert.equal(app.run('state.activeStudy.cachedRun'), null);
-  assert.match(app.nodes.get('notice').textContent, /fresh audit/);
+  assert.match(app.nodes.get('notice').textContent, /Check adherence again/);
 });
 
 test('scan and diagnose still dispatch to their existing endpoints', async () => {
@@ -487,7 +487,7 @@ test('cancel during audit persistence does not publish a completion notice', asy
   await app.run('analyzeActiveStudy()');
   app.run('finishSave()'); await app.run('pending');
   assert.doesNotMatch(app.nodes.get('notice').textContent, /Audit complete/);
-  assert.equal(app.nodes.get('analyze-button').textContent, 'Run audit');
+  assert.equal(app.nodes.get('analyze-button').textContent, 'Check adherence');
 });
 
 test('audit rejects a response bound to a different case', async () => {
@@ -495,14 +495,14 @@ test('audit rejects a response bound to a different case', async () => {
   app.run(`api = async () => ({...report(fixture), contentHash:'stale'});`);
   await app.run('analyzeActiveStudy()');
   assert.equal(app.run('state.activeStudy.cachedRun'), null);
-  assert.match(app.nodes.get('notice').textContent, /Stale audit response/);
+  assert.match(app.nodes.get('notice').textContent, /Stale adherence response/);
 });
 
 test('audit save failures do not announce completion', async () => {
   const app = studio(); await app.run('importAuditText(fixture)');
   app.run(`saveStudy = async () => { throw new Error('storage failure'); };`);
   await app.run('analyzeActiveStudy()');
-  assert.equal(app.nodes.get('analyze-button').textContent, 'Run audit');
+  assert.equal(app.nodes.get('analyze-button').textContent, 'Check adherence');
   assert.match(app.nodes.get('notice').textContent, /storage failure/);
   assert.doesNotMatch(app.nodes.get('notice').textContent, /Audit complete/);
 });
@@ -524,7 +524,7 @@ test('delayed import persistence does not select a case after newer navigation',
   app.run('finishSave()'); await app.run('pending');
   assert.equal(app.run('state.activeStudy'), null);
   assert.equal(app.nodes.get('audit-import-panel').hidden, false);
-  assert.equal(app.nodes.get('study-title').textContent, 'Audit a judge evaluation');
+  assert.equal(app.nodes.get('study-title').textContent, 'Check judge adherence');
   assert.doesNotMatch(app.nodes.get('notice').textContent, /Case loaded/);
   assert.equal(app.saved.size, 1);
 });
@@ -722,7 +722,7 @@ test('audit execution explains when case validation is missing', async () => {
   await app.run('analyzeActiveStudy()');
   assert.equal(app.calls.length, 0);
   assert.equal(app.run('state.scanController'), null);
-  assert.match(app.nodes.get('notice').textContent, /Validate this audit case before running it/);
+  assert.match(app.nodes.get('notice').textContent, /Validate this case before checking adherence/);
 });
 
 test('shared card activation supports keyboard without intercepting nested controls', () => {

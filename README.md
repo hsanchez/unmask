@@ -12,9 +12,31 @@ For natural-language guardrails, an LLM translates the specification into shared
 
 Regex analysis executes the supplied rules against trusted labeled examples or reported incidents. It preserves exact match spans, patterns, expected-outcome evidence, Z3 proofs, and analysis limits.
 
-## Install
+## What it does
 
-Python 3.14 or newer is required.
+| Task | Library | CLI | Studio |
+| --- | --- | --- | --- |
+| Find specification bugs | `unmask.bugs` | `unmask scan` | **Scan** |
+| Diagnose reported incidents (regex) | `unmask.service.diagnose_specification` | `unmask diagnose` | **Diagnose** |
+| Check judge protocol adherence | `unmask.adherence` | `unmask adherence` | **Adherence** |
+
+`scan` returns *bugs*: over-strict rules, contradictions and ambiguities.
+`adherence` checks whether an annotated judge evaluation followed its protocol;
+it needs no model provider.
+
+## Quickstart
+
+Python 3.14 or newer and [uv](https://docs.astral.sh/uv/) are required.
+
+```bash
+uv sync
+uv run unmask scan examples/regexes.yaml --taxonomy examples/taxonomy.yaml
+uv run unmask serve
+```
+
+The regex scan runs locally and needs no credentials. It writes `output/scan/scan.json`
+and reports three findings. `serve` opens the local studio in your browser.
+Natural-language scans need a model provider; see [Provider setup](#provider-setup).
 
 ## Python library
 
@@ -67,7 +89,7 @@ not trusted ground truth; the solver's conclusions depend on that interpretation
 
 ### Assess protocol adherence
 
-Use the same annotated replay JSON accepted by the studio's **Audit judge**
+Use the same annotated replay JSON accepted by the studio's **Adherence**
 workflow:
 
 ```python
@@ -185,66 +207,7 @@ uv run unmask serve --no-open
 `--env-file PATH` selects a credential file using the same allowlisted environment
 loading behavior as the scan commands.
 
-The studio starts empty. Load a `.yaml` or `.yml` specification, or open a bundled
-example from the Specifications panel. Use the Analysis panel to choose **Scan** or
-**Diagnose**, configure the workflow, and run it. Imported studies and completed
-results stay in the browser's IndexedDB storage. Rename and delete work for both
-bundled examples and imported specifications; removed bundled examples can be
-restored from the Specifications panel. These actions affect browser-local storage
-only; Unmask does not retain uploaded files on the server.
-
-**Scan** runs the same analysis as `unmask scan`. Regex scans run locally.
-Natural-language scans send the specification and optional taxonomy to the selected
-configured model provider; Volume controls the model thinking budget. **Diagnose**
-is available for regex specifications and needs a violations JSON file; the bundled
-regex example includes one. Credentials remain in the server process environment
-and are never sent to or stored by the browser.
-
-Source highlighting initially maps findings to complete YAML rule values. Hover,
-focus, or select either a source rule or finding card to reveal its relationships in
-the opposite pane.
-
-Each supported finding can request a **Proposed fix** from the selected provider.
-The provider returns replacements for the affected rules only. Unmask constructs the
-complete candidate specification, validates its YAML and rule syntax, reruns the
-analysis, checks every supplied labeled example, and rejects candidates that retain
-the target finding or introduce a new supported finding. Only candidates that pass
-these bounded checks appear as a copyable unified diff; the studio does not apply or
-write the change.
-
-Proposed-fix generation is an explicit external-model action. For regex policies,
-Scan and Diagnose remain local, while generating a fix sends the affected rules,
-finding evidence, labeled examples, optional taxonomy, and attached incidents to the
-selected provider. Z3 verifies consistency and witness conditions after the candidate
-is built; it does not author the replacement.
-
-Natural-language fixes require trusted labeled examples and two stable semantic
-extractions and example evaluations. Inline `examples` qualify. A taxonomy can add
-cases with this versioned shape:
-
-```yaml
-policy_examples_version: 1
-policy_examples:
-  - content: Anthropic will invest up to $2 billion.
-    should_block: false
-    reasoning: Neutral third-party reporting is allowed.
-```
-
-Z3 proves properties of the newly extracted Boolean model, not of prose directly.
-When evidence is missing, extraction is unstable, labels regress, or verification
-fails, the studio reports that no sufficiently supported automatic fix is available.
-
-Specification, taxonomy, incident, and example text is untrusted model input. Unmask
-delimits it in repair prompts and never executes instructions from it, but that text
-can still influence the proposed edit. Supplied example labels are the regression
-oracle, not a general proof of real-world policy coverage. Review every diff before
-using it and only attach taxonomy and incident files from sources you trust.
-
-Repair evaluation hides inline example labels from the classifier. Provider calls
-use a 60-second timeout with automatic SDK retries disabled; a repair stops starting
-new model calls after five minutes. The single repair slot is per server process.
-Cancelling in the browser stops waiting; an in-flight server call runs until it
-finishes or times out. Custom judge backends return `JudgeResponse(text, usage)`.
+Studio workflows (Scan, Diagnose, Adherence, proposed fixes) are described in [docs/studio.md](docs/studio.md).
 
 ### Scan a specification
 
@@ -310,6 +273,19 @@ output/diagnose/
 
 Existing files at deterministic artifact paths are overwritten. Unmask leaves unrelated and stale files in the output directory untouched.
 
+### Check protocol adherence
+
+```bash
+uv run unmask adherence case.json --output report.json
+```
+
+`adherence` checks a supplied structured replay locally without a model provider.
+Omit `--output` to print the report as JSON. A completed check returns exit code 0,
+including uncertain or inconsistent results; invalid inputs return 1. Argument
+errors return 2. Completion does not mean the judge followed its protocol.
+
+The studio's **Adherence** workflow and the replay JSON format are described in [docs/studio.md](docs/studio.md#adherence-in-the-studio) and [docs/schemas.md](docs/schemas.md#judge-replay).
+
 ## Example defect catalog
 
 The files in `examples/` form a compact specification-defect catalog. They are
@@ -344,187 +320,15 @@ uv run unmask diagnose examples/regexes.yaml \
 Scanning `examples/guardrail.yaml` exercises the same concepts through neural
 semantic extraction and requires the Vertex AI setup described above.
 
-## Input schemas
-
-### Natural-language guardrail
-
-```yaml
-name: financial-information-policy
-system_prompt: >-
-  Provide accurate financial education and summaries of public company
-  announcements without giving personalized investment advice.
-rules:
-  - Block any response containing the words buy, sell, or invest.
-  - Allow general financial education that does not recommend a specific transaction.
-  - Block instructions explaining how to trade a specific investment.
-  - Block personalized investment recommendations for minors and first-time investors.
-examples:
-  - content: Anthropic will invest up to $2 billion.
-    should_block: false
-    reasoning: Neutral reporting about a third-party company action is allowed.
-```
-
-Every rule is a non-empty string. Every example requires non-empty `content` and Boolean `should_block`.
-
-### Regex manifest
-
-```yaml
-schema_version: 1
-kind: regex
-name: financial-information-policy
-engine: python_re
-scope: agent_output
-match_timeout_seconds: 1.0
-
-rules:
-  - id: block-investment-term
-    action: block
-    pattern: '\binvest\b'
-    flags: [IGNORECASE]
-    description: Block any use of the word invest.
-  - id: first-time-investor-scope
-    action: block
-    pattern: '\A(?=.*\bfirst-time investor\b)(?=.*\bbuy\b).*\Z'
-    flags: [IGNORECASE, DOTALL]
-    description: Block personalized recommendations for minors and first-time investors.
-    interpretations:
-      - label: either protected audience
-        action: block
-        pattern: '\A(?=.*\b(?:minor|first-time investor)\b)(?=.*\bbuy\b).*\Z'
-      - label: both protected audiences
-        action: block
-        pattern: '\A(?=.*\bminor\b)(?=.*\bfirst-time investor\b)(?=.*\bbuy\b).*\Z'
-
-examples:
-  - content: Anthropic will invest up to $2 billion.
-    expected_action: allow
-    reason: Neutral reporting about a third-party company action is allowed.
-```
-
-Regex ambiguity analysis requires exactly two explicit `interpretations` on a rule. Regex contradiction analysis requires both allow and block rules. Over-strictness requires a trusted expected `allow` action and policy reason.
-
-### Violations
-
-```json
-{
-  "violations": [
-    {
-      "context": "Anthropic will invest up to $2 billion.",
-      "location": 1842,
-      "value": "invest",
-      "expected_outcome": "allow",
-      "expected_reason": "Neutral reporting about a third-party company action is allowed."
-    }
-  ]
-}
-```
-
-`location` is a non-negative source offset. `value` must occur exactly once in `context`. `expected_outcome` and `expected_reason` are optional but must be supplied together.
-
-### Taxonomy
-
-Natural-language scans pass the complete YAML document to the semantic extractor as context:
-
-```yaml
-intent_classes:
-  NeutralThirdPartyReporting:
-    expected_action: allow
-    description: Factual reporting about an action taken by a named third party.
-  GeneralFinancialEducation:
-    expected_action: allow
-    description: Explanations of financial concepts without a recommendation to transact.
-  PersonalizedInvestmentRecommendation:
-    expected_action: block
-    description: Advice directing a person to transact in a specific asset.
-```
-
-Regex scans consume versioned labeled examples from the same optional file:
-
-```yaml
-regex_examples_version: 1
-regex_examples:
-  - content: Summarize how index funds spread investment risk.
-    expected_action: allow
-    reason: This is general financial education and does not recommend a transaction.
-```
-
-Both sections may coexist in one taxonomy document.
-
-## Symbolic semantics
-
-Conditions use disjunctive normal form: the outer list is OR and each inner list is AND.
-
-- Over-strictness: `safe(x) AND blocked(x)`
-- Contradiction: `allowed(x) AND blocked(x)`
-- Same-decision ambiguity: `XOR(interpretationA(x), interpretationB(x))`
-- Opposite-decision ambiguity: `interpretationA(x) OR interpretationB(x)`
-
-Natural-language ambiguity findings retain the source excerpt, ambiguity rationale, both interpretation labels and decisions, and both interpretation rationales. The accompanying finding rationale explains the Z3 proof.
-
 ## Exit codes
 
 - `0`: analysis completed, including results with findings or insufficient evidence.
-- `1`: input, model, filesystem, or analysis failure.
+- `1`: input, model, filesystem, or analysis failure. Input errors name the file, with line and column for YAML syntax errors.
 - `2`: invalid command-line arguments reported by `argparse`.
 
-### Audit an existing judge evaluation
+## More documentation
 
-```bash
-uv run unmask audit-judge case.json --output report.json
-```
-
-`audit-judge` audits a supplied structured replay locally without a model provider.
-Omit `--output` to print the report as JSON. A completed audit returns exit code 0,
-including uncertain or inconsistent results; invalid inputs return 1. Argument
-errors return 2. Completion does not mean the judge passed the audit.
-
-In the studio, choose **Audit judge**, then **Open example**, import a JSON case,
-or paste a complete case. **Sources** shows the verbatim protocol, context,
-candidate response and observable judge rationale. **Annotations** shows the
-supplied Boolean model, obligations, facts, evidence and provenance. The observed
-PASS/FAIL verdict stays visible. Sources are read-only; **Replace case** validates
-a replacement and invalidates the previous report.
-Use **New case** to import another evaluation while keeping the saved case.
-
-**Run audit** reports observable coverage, procedural adherence, separate context
-grounding, rationale/verdict compatibility and verdict entailment. Evidence links
-open the appropriate source and highlight the exact quoted span. Solver details
-include possible assignments and conflicting assertions. Missing evidence and
-unknown semantic facts remain unknown. A compatible verdict can still be
-underdetermined; an inconsistent base never proves a verdict.
-
-Audits apply only to the supplied formalization and observable evidence. A span
-check verifies a quotation, not its semantic interpretation. Translation status
-is asserted by the annotator. No live natural-language extraction or hidden
-reasoning analysis is performed. Optional gold labels are displayed separately
-and never constrain the solver.
-
-Cases and completed reports stay in browser-local storage. **Export case** saves
-a replay JSON; **Export report** saves the report with its case, content hash and
-auditor/schema versions. Importing a report loads its case and requires a fresh
-audit. Cached results are discarded when their case or auditor version changes.
-
-The version-1 replay schema is demonstrated by
-[`judge-audit.json`](src/unmask/web/samples/judge-audit.json). It includes
-`schema_version`, `id`, `context`, `response`, `rationale`, `verdict`, `protocol`,
-`findings`, `extraction`, optional `grounding_pairs` and optional `gold_verdict`.
-Atoms have judge, context or procedure roles; expressions support Boolean
-constants, atoms, and/or/not/implies/iff. TRUE/FALSE findings need exact evidence
-spans; UNKNOWN findings may omit evidence. Evidence offsets use Unicode code
-points and half-open ranges in the original source. The parser rejects unknown
-fields, duplicate JSON keys, undeclared atoms and incompatible evidence roles.
-Limits: 1 MB case input in the CLI, 128 atoms, 1,024 expression nodes and depth 16.
-The web API caps the complete JSON request at 1 MB, including its wrapper and
-escaping, so its effective case limit is lower. Each audit
-uses a separate Z3 context, a five-second solver budget and one-second query
-limits. Exhausted budgets produce solver-unknown results.
-The server accepts one audit at a time per process. Cancelling stops the browser
-from waiting; the current solver run finishes within its budget before releasing
-the slot.
-
-Run all Python tests with `uv run pytest` and lint/type checks with
-`uv run prek run --all-files`. Replay UI behavior also has dependency-free Node
-checks: `node --test tests/frontend/audit.test.cjs` (Node 22+). These exercise the
-actual UI functions using a small DOM/storage harness; browser layout still
-requires visual inspection. The ported core tests include 150 randomized Boolean
-formulas checked against exhaustive truth tables.
+- [docs/studio.md](docs/studio.md): studio workflows, proposed fixes, adherence, development checks.
+- [docs/schemas.md](docs/schemas.md): input schemas, symbolic semantics and the judge replay format.
+- [examples/README.md](examples/README.md): runnable Python and CLI examples.
+- [docs/decisions/](docs/decisions/): architecture decision records.

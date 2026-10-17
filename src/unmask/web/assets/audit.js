@@ -19,7 +19,7 @@ function configureAuditWorkspace(enabled) {
   elements.sourceView.hidden = false;
   elements.sourceView.classList.toggle("audit-source", enabled);
   elements.sourceTab.textContent = enabled ? "Sources / annotations" : "Specification";
-  element("findings-heading").replaceChildren(auditElement("span", enabled ? "Audit results" : "specification bugs"), auditElement("small", enabled ? "(replay)" : "(structure)"));
+  element("findings-heading").replaceChildren(auditElement("span", enabled ? "Adherence results" : "specification bugs"), auditElement("small", enabled ? "(replay)" : "(structure)"));
   element("source-heading").replaceChildren(auditElement("span", enabled ? "Case sources" : "specification"), auditElement("small", "(source)"));
   elements.findingsTab.firstChild.textContent = enabled ? "Results " : "Bugs ";
   element("audit-mode").classList.toggle("active", enabled);
@@ -42,19 +42,19 @@ function startAuditImport(replace = false) {
   elements.sourceView.hidden = true;
   elements.analysisControls.hidden = true;
   elements.analysisEmpty.hidden = false;
-  elements.analysisEmpty.textContent = "Local audit · no model provider";
+  elements.analysisEmpty.textContent = "Local check · no model provider";
   elements.workflowToggle.hidden = false;
   elements.scanMode.classList.remove("active");
   elements.scanMode.setAttribute("aria-pressed", "false");
   elements.diagnoseMode.classList.remove("active");
   elements.diagnoseMode.setAttribute("aria-pressed", "false");
-  elements.studyTitle.textContent = replace ? "Replace audit case" : "Audit a judge evaluation";
+  elements.studyTitle.textContent = replace ? "Replace case" : "Check judge adherence";
   elements.activeFileControl.hidden = true;
   element("audit-import-panel").hidden = false;
   element("audit-paste").value = "";
   element("audit-import-cancel").hidden = !state.auditReplacement;
   element("audit-import-cancel").disabled = false;
-  renderFindingMessage("Load a case to view audit results.");
+  renderFindingMessage("Load a case to view adherence results.");
   elements.summary.hidden = true;
   setNotice("");
   renderStudyLists();
@@ -107,7 +107,7 @@ async function importAuditText(text, name = "audit-case.json") {
   state.hoveredFindingIds = [];
   renderStudyLists();
   renderActiveStudy();
-  setNotice(input.historical ? "Report case imported. Run a fresh audit; imported results are not treated as verified." : "Case loaded. Review sources and annotations, then run the local audit.", "success");
+  setNotice(input.historical ? "Report case imported. Check adherence again; imported results are not treated as verified." : "Case loaded. Review sources and annotations, then check adherence locally.", "success");
   closeDrawers(false);
   return study;
 }
@@ -232,7 +232,7 @@ function renderAuditResults(study) {
   elements.mobileFindingCount.textContent = String(run?.checks.length || 0);
   element("audit-export-report").disabled = !run;
   if (!run) {
-    renderFindingMessage("Run audit to inspect this case.");
+    renderFindingMessage("Check adherence to inspect this case.");
     return;
   }
   elements.summary.textContent = `${run.summary.status.replaceAll("_", " ")} · protocol adherence ${run.summary.overall.toLowerCase()}`;
@@ -275,7 +275,7 @@ function renderAuditResults(study) {
 function renderAuditWorkspace(study) {
   configureAuditWorkspace(true);
   elements.studyTitle.textContent = study.title;
-  elements.studyKind.textContent = "Judge audit · replay";
+  elements.studyKind.textContent = "Judge adherence · replay";
   elements.activeFileControl.hidden = true;
   elements.analysisEmpty.hidden = true;
   elements.analysisControls.hidden = false;
@@ -288,8 +288,8 @@ function renderAuditWorkspace(study) {
   for (const control of [elements.providerControl, elements.modelControl, elements.thinkingBudgetControl,
     elements.taxonomyControl, elements.incidentsButton, elements.regexModelNote, elements.workflowNote]) control.hidden = true;
   elements.providerDisclosure.hidden = false;
-  elements.providerDisclosure.textContent = "Local audit · no model provider";
-  elements.analyzeButton.textContent = state.scanController ? "Cancel" : "Run audit";
+  elements.providerDisclosure.textContent = "Local check · no model provider";
+  elements.analyzeButton.textContent = state.scanController ? "Cancel" : "Check adherence";
   elements.analyzeButton.disabled = false;
   element("audit-verdict").textContent = `Judge verdict: ${study.validation.case.verdict} · read-only`;
   renderAuditSource(study);
@@ -321,7 +321,7 @@ function bindAuditEvents() {
     const selection = state.selection;
     try {
       if (file) {
-        const text = await readTextFile(file, /\.json$/i, "Choose an audit JSON file.");
+        const text = await readTextFile(file, /\.json$/i, "Choose a replay JSON file.");
         if (selection === state.selection) await importAuditText(text, file.name);
       }
     }

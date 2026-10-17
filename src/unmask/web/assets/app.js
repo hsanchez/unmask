@@ -474,7 +474,7 @@ function currentWorkflow(study) {
 }
 
 function runActionLabel(study) {
-  return {scan: "Scan", diagnose: "Diagnose", audit_judge: "Run audit"}[currentWorkflow(study)];
+  return {scan: "Scan", diagnose: "Diagnose", audit_judge: "Check adherence"}[currentWorkflow(study)];
 }
 
 function matchingCachedRun(study) {
@@ -589,7 +589,7 @@ function renderEmptyWorkspace() {
   elements.scanMode.setAttribute("aria-pressed", "true");
   elements.diagnoseMode.classList.remove("active");
   elements.diagnoseMode.setAttribute("aria-pressed", "false");
-  elements.analysisEmpty.textContent = "Select a specification or choose Audit judge.";
+  elements.analysisEmpty.textContent = "Select a specification or choose Adherence.";
   elements.studyKind.textContent = "No specification loaded";
   elements.studyTitle.textContent = "Select or import a specification";
   elements.sourceName.textContent = "";
@@ -1171,7 +1171,7 @@ function analysisRequest(study) {
   if (workflow === "audit_judge") {
     const contentHash = study.validation?.contentHash;
     if (typeof contentHash !== "string" || !contentHash) {
-      throw new Error("Validate this audit case before running it.");
+      throw new Error("Validate this case before checking adherence.");
     }
     return {path: "/api/v1/judge-audits", payload: {
       case: {name: study.auditCaseName, text: study.auditCaseText},
@@ -1236,7 +1236,7 @@ async function analyzeActiveStudy() {
     });
     if (!current()) return;
     if (workflow === "audit_judge" && run.contentHash !== request.payload.contentHash) {
-      throw new Error("Stale audit response discarded.");
+      throw new Error("Stale adherence response discarded.");
     }
     study.cachedRun = run;
     study.updatedAt = new Date().toISOString();

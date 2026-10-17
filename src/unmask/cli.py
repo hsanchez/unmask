@@ -7,6 +7,8 @@ import json
 import os
 import sys
 import webbrowser
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -17,6 +19,7 @@ from dotenv import dotenv_values, find_dotenv
 from .backend import create_backend
 from .config import TargetConfig
 from .diagnosis import DiagnosisReport
+from .importer import load_violations_text
 from .judge import audit_judge_case
 from .service import (
   DEFAULT_MODELS,
@@ -24,6 +27,7 @@ from .service import (
   bugs,
   diagnose_specification,
   diagnosis_status,
+  validate_specification,
 )
 from .visualization import (
   CollectionResult,
@@ -74,13 +78,13 @@ class ServeArguments:
 
 
 @dataclass(frozen=True)
-class AuditArguments:
+class AdherenceArguments:
   case: Path
   output: Path | None
 
 
 type CommandArguments = (
-  ScanArguments | DiagnoseArguments | ServeArguments | AuditArguments
+  ScanArguments | DiagnoseArguments | ServeArguments | AdherenceArguments
 )
 
 
@@ -117,6 +121,21 @@ def _port_number(value: str) -> int:
   return port
 
 
+@contextmanager
+def _attributed_to(path: Path) -> Generator[None]:
+  """Name the input file in validation errors so users know what to fix."""
+  try:
+    yield
+  except yaml.YAMLError as exc:
+    mark = cast("yaml.Mark | None", getattr(exc, "problem_mark", None))
+    problem = cast("str | None", getattr(exc, "problem", None))
+    if mark is None or problem is None:
+      raise ValueError(f"{path}: {exc}") from exc
+    raise ValueError(f"{path}:{mark.line + 1}:{mark.column + 1}: {problem}") from exc
+  except (TypeError, ValueError) as exc:
+    raise ValueError(f"{path}: {exc}") from exc
+
+
 def _run_scan(
   specification_path: Path,
   *,
@@ -124,12 +143,18 @@ def _run_scan(
   output_directory: Path,
   target: TargetConfig,
 ) -> int:
+  specification_text = specification_path.read_text(encoding="utf-8")
+  with _attributed_to(specification_path):
+    _ = validate_specification(specification_text, name=specification_path.name)
+  taxonomy_text: str | None = None
+  if taxonomy_path is not None:
+    taxonomy_text = taxonomy_path.read_text(encoding="utf-8")
+    with _attributed_to(taxonomy_path):
+      _ = cast("object", yaml.safe_load(taxonomy_text))
   result: ScanResult = bugs(
-    specification_path.read_text(encoding="utf-8"),
+    specification_text,
     specification_name=specification_path.name,
-    taxonomy_text=(
-      taxonomy_path.read_text(encoding="utf-8") if taxonomy_path is not None else None
-    ),
+    taxonomy_text=taxonomy_text,
     model=target,
     backend_factory=create_backend,
   )
@@ -217,9 +242,15 @@ def _run_diagnose(
   output_directory: Path,
   open_index: bool,
 ) -> int:
+  manifest_text = manifest_path.read_text(encoding="utf-8")
+  violations_text = violations_path.read_text(encoding="utf-8")
+  with _attributed_to(manifest_path):
+    _ = validate_specification(manifest_text, name=manifest_path.name)
+  with _attributed_to(violations_path):
+    _ = load_violations_text(violations_text)
   result = diagnose_specification(
-    manifest_path.read_text(encoding="utf-8"),
-    violations_path.read_text(encoding="utf-8"),
+    manifest_text,
+    violations_text,
     specification_name=manifest_path.name,
     source=manifest_path.resolve(),
   )
@@ -255,11 +286,11 @@ def _build_parser() -> argparse.ArgumentParser:
   )
   subparsers = parser.add_subparsers(dest="command", required=True)
 
-  audit_parser = subparsers.add_parser(
-    "audit-judge", help="audit a structured judge replay locally"
+  adherence_parser = subparsers.add_parser(
+    "adherence", help="check protocol adherence of a structured judge replay locally"
   )
-  _ = audit_parser.add_argument("case", type=Path, help="annotated audit case JSON")
-  _ = audit_parser.add_argument(
+  _ = adherence_parser.add_argument("case", type=Path, help="annotated audit case JSON")
+  _ = adherence_parser.add_argument(
     "--output", type=Path, help="report JSON file (default: stdout)"
   )
 
@@ -381,8 +412,8 @@ def _load_environment(env_file: Path | None) -> None:
 def _parse_arguments(argv: list[str] | None) -> CommandArguments:
   namespace: argparse.Namespace = _build_parser().parse_args(argv)
   values: dict[str, object] = cast("dict[str, object]", vars(namespace))
-  if values["command"] == "audit-judge":
-    return AuditArguments(
+  if values["command"] == "adherence":
+    return AdherenceArguments(
       case=cast("Path", values["case"]), output=cast("Path | None", values["output"])
     )
   if values["command"] == "scan":
@@ -416,13 +447,15 @@ def main(argv: list[str] | None = None) -> int:
     SystemExit: if argument parsing fails or `--help` is requested, via argparse.
   """
   arguments = sys.argv[1:] if argv is None else argv
-  if not arguments or arguments[0] != "audit-judge":
+  if not arguments or arguments[0] != "adherence":
     _load_environment(_extract_env_file(argv))
   args: CommandArguments = _parse_arguments(argv)
 
   try:
-    if isinstance(args, AuditArguments):
-      report = audit_judge_case(args.case.read_text(encoding="utf-8"))
+    if isinstance(args, AdherenceArguments):
+      case_text = args.case.read_text(encoding="utf-8")
+      with _attributed_to(args.case):
+        report = audit_judge_case(case_text)
       if args.output is None:
         print(json.dumps(report, indent=2, ensure_ascii=False))
       else:
