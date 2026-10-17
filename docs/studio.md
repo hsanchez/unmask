@@ -96,8 +96,14 @@ audit. Cached results are discarded when their case or auditor version changes.
 ## Development checks
 
 Run all Python tests with `uv run pytest` and lint/type checks with
-`uv run prek run --all-files`. Replay UI behavior also has dependency-free Node
-checks: `node --test tests/frontend/audit.test.cjs` (Node 22+). These exercise the
+`uv run prek run --all-files`. Studio UI behavior also has dependency-free Node
+checks: `node --test tests/frontend/*.test.cjs` (Node 22+). These exercise the
 actual UI functions using a small DOM/storage harness; browser layout still
 requires visual inspection. The ported core tests include 150 randomized Boolean
 formulas checked against exhaustive truth tables.
+
+The browser code is a set of classic scripts (`studio-*.js`, `audit*.js`, `app.js`)
+that share one global scope; there is no bundler or module system. `index.html`
+lists them in load order, and the server sends `Cache-Control: no-store`, so an
+edited script is picked up on reload. The Node harness reads that same list, so a
+new script is picked up by adding it to `index.html` only.
