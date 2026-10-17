@@ -126,13 +126,14 @@ def _attributed_to(path: Path) -> Generator[None]:
   """Name the input file in validation errors so users know what to fix."""
   try:
     yield
-  except yaml.YAMLError as exc:
-    mark = cast("yaml.Mark | None", getattr(exc, "problem_mark", None))
-    problem = cast("str | None", getattr(exc, "problem", None))
-    if mark is None or problem is None:
+  except yaml.MarkedYAMLError as exc:
+    mark = exc.problem_mark
+    if mark is None or exc.problem is None:
       raise ValueError(f"{path}: {exc}") from exc
-    raise ValueError(f"{path}:{mark.line + 1}:{mark.column + 1}: {problem}") from exc
-  except (TypeError, ValueError) as exc:
+    raise ValueError(
+      f"{path}:{mark.line + 1}:{mark.column + 1}: {exc.problem}"
+    ) from exc
+  except (yaml.YAMLError, TypeError, ValueError) as exc:
     raise ValueError(f"{path}: {exc}") from exc
 
 
@@ -289,7 +290,7 @@ def _build_parser() -> argparse.ArgumentParser:
   adherence_parser = subparsers.add_parser(
     "adherence", help="check protocol adherence of a structured judge replay locally"
   )
-  _ = adherence_parser.add_argument("case", type=Path, help="annotated audit case JSON")
+  _ = adherence_parser.add_argument("case", type=Path, help="annotated replay JSON")
   _ = adherence_parser.add_argument(
     "--output", type=Path, help="report JSON file (default: stdout)"
   )

@@ -147,6 +147,8 @@ structured interpretation, not raw prose or hidden reasoning. Empty findings
 do not imply success: always inspect `result.overall`, `result.status`, and
 `result.limitations`. `timeout_ms` bounds each solver query within the existing
 total audit budget. `VerificationCase.to_dict()` exports replay input data.
+`result.to_dict()` returns the studio's JSON report for the same check (`summary`,
+`checks`, `annotations`, `unknownAtoms`, `limitations` and the replay envelope).
 
 Invalid replay input raises `unmask.ValidationError` (a `ValueError`);
 malformed specification inputs raise `TypeError`, `ValueError`, or a PyYAML

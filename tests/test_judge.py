@@ -26,6 +26,7 @@ from unmask.judge import (
   Expr,
   ValidationError,
   VerificationCase,
+  adherence,
   audit,
   audit_judge_case,
   compile_expr,
@@ -106,9 +107,6 @@ def _observation(atom: str, value: str) -> dict[str, object]:
   return {"atom": atom, "value": value, "evidence": evidence, "explanation": "test"}
 
 
-# --- Expression compilation -------------------------------------------------
-
-
 @pytest.mark.parametrize("operator,identity", [("and", True), ("or", False)])
 def test_compiled_boolean_operations_keep_the_audit_context(
   operator: str, identity: bool
@@ -171,9 +169,6 @@ def test_compilation_rejects_an_incompatible_explicit_context() -> None:
       {"a": z3.Bool("a", ctx=operand_context)},
       context=selected_context,
     )
-
-
-# --- Replay validation ------------------------------------------------------
 
 
 def _set(key: str, value: object) -> Mutation:
@@ -362,9 +357,6 @@ def test_protocol_text_is_not_observed_procedural_evidence() -> None:
 
   with pytest.raises(ValidationError, match="invalid evidence source"):
     _ = VerificationCase.parse(data)
-
-
-# --- Audit semantics --------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -636,9 +628,6 @@ def test_random_formulas_match_exhaustive_truth_tables() -> None:
     assert _verdict_status(report) == _expected_status(outcomes, observed == "PASS")
 
 
-# --- Studio wire reports ----------------------------------------------------
-
-
 def test_replay_document_and_hash_contract() -> None:
   text = replay_text()
   case = load_json_object(text)
@@ -770,3 +759,36 @@ def test_concurrent_audits_use_independent_solver_contexts() -> None:
 
   assert json_object(reports[0]["summary"])["entailment"] == "ENTAILED"
   assert json_object(reports[1]["summary"])["entailment"] == "UNDERDETERMINED"
+
+
+@pytest.mark.parametrize(
+  "prefix,consistency,entailment",
+  [
+    ("A_", "COMPATIBLE", "ENTAILED"),
+    ("D_", "INCOMPATIBLE", "REFUTED"),
+    ("invalid", "UNKNOWN", "NOT_CHECKED"),
+  ],
+)
+def test_summary_reports_consistency_and_entailment(
+  prefix: str, consistency: str, entailment: str
+) -> None:
+  summary = adherence(VerificationCase.from_json(replay_text(prefix))).summary
+
+  assert summary["consistency"] == consistency
+  assert summary["entailment"] == entailment
+
+
+def test_unknown_atoms_lists_atoms_without_a_stated_value() -> None:
+  case = VerificationCase.from_json(replay_text("unknown"))
+
+  assert adherence(case).unknown_atoms == ["j2"]
+
+
+def test_wire_report_starts_with_the_envelope_keys() -> None:
+  case = VerificationCase.from_json(replay_text())
+
+  envelope_keys = list(validate_audit_case(case))
+
+  wire = adherence(case).to_dict()
+
+  assert list(wire)[: len(envelope_keys)] == envelope_keys

@@ -982,10 +982,54 @@ class VerificationFinding:
   check: VerificationCheck | None = None
 
 
+_CONSISTENCY_LABELS: dict[bool | None, str] = {
+  True: "COMPATIBLE",
+  False: "INCOMPATIBLE",
+  None: "UNKNOWN",
+}
+
+
+class AuditSummary(TypedDict):
+  """The conclusion the studio shows for each adherence dimension."""
+
+  status: str
+  overall: str
+  coverage: str
+  procedure: str
+  grounding: str
+  consistency: str
+  entailment: str
+
+
+class AuditEnvelope(TypedDict):
+  """Replay identity shared by validated and completed reports."""
+
+  schemaVersion: int
+  auditorVersion: str
+  workflow: str
+  name: str
+  contentHash: str
+  documents: list[dict[str, object]]
+  case: dict[str, object]
+
+
+class AdherenceReport(AuditEnvelope):
+  """The studio wire format for a completed adherence check."""
+
+  status: str
+  audit: AuditReport
+  checks: list[dict[str, object]]
+  summary: AuditSummary
+  unknownAtoms: list[str]
+  annotations: list[dict[str, object]]
+  limitations: list[str]
+
+
 @dataclass(frozen=True)
 class VerificationResult:
   """Verification conclusions conditional on the supplied interpretation."""
 
+  case: VerificationCase
   report: AuditReport
   checks: tuple[VerificationCheck, ...]
 
@@ -1028,6 +1072,51 @@ class VerificationResult:
       ),
     )
 
+  @property
+  def summary(self) -> AuditSummary:
+    verdict = self.report.get("rationale_verdict")
+    return {
+      "status": self.report["status"],
+      "overall": self.report["protocol_adherent"],
+      "coverage": aggregate(
+        [check.status for check in self.checks if check.dimension == "coverage"]
+      ),
+      "procedure": self.report["procedural_adherence"],
+      "grounding": self.report.get("grounding_correctness", "UNKNOWN"),
+      "consistency": _CONSISTENCY_LABELS[
+        self.report.get("rationale_verdict_consistent")
+      ],
+      "entailment": verdict["status"] if verdict else "NOT_CHECKED",
+    }
+
+  @property
+  def unknown_atoms(self) -> list[str]:
+    """Atoms with no annotation that states a value."""
+    return [
+      atom.id
+      for atom in self.case.atoms
+      if not any(
+        finding.atom == atom.id and finding.value != Truth.UNKNOWN
+        for finding in self.case.annotations
+      )
+    ]
+
+  def to_dict(self) -> AdherenceReport:
+    """Serialize to the studio wire format."""
+    return {
+      **_envelope(self.case),
+      "status": "completed",
+      "audit": self.report,
+      "checks": [check.to_dict() for check in self.checks],
+      "summary": self.summary,
+      "unknownAtoms": self.unknown_atoms,
+      "annotations": [
+        {"id": f"finding:{index}:{finding['atom']}", **finding}
+        for index, finding in enumerate(self.report["findings"])
+      ],
+      "limitations": list(self.limitations),
+    }
+
 
 def _documents(case: VerificationCase) -> list[dict[str, object]]:
   return [
@@ -1048,7 +1137,7 @@ def _documents(case: VerificationCase) -> list[dict[str, object]]:
   ]
 
 
-def _envelope(case: VerificationCase) -> dict[str, object]:
+def _envelope(case: VerificationCase) -> AuditEnvelope:
   payload = case.to_dict()
   binding: dict[str, object] = {
     "case": payload,
@@ -1066,7 +1155,7 @@ def _envelope(case: VerificationCase) -> dict[str, object]:
   }
 
 
-def validate_audit_case(text: str | VerificationCase) -> dict[str, object]:
+def validate_audit_case(text: str | VerificationCase) -> AuditEnvelope:
   """Validate replay annotations and evidence without making model calls.
 
   Raises:
@@ -1160,56 +1249,15 @@ def adherence(case: VerificationCase, *, timeout_ms: int = 1000) -> Verification
       verdict,
       verdict_atoms,
     )
-  return VerificationResult(report, tuple(checks))
+  return VerificationResult(case, report, tuple(checks))
 
 
-def audit_judge_case(text: str | VerificationCase) -> dict[str, object]:
-  """Adapt the shared verification result to the existing studio wire format.
+def audit_judge_case(text: str | VerificationCase) -> AdherenceReport:
+  """Check adherence and serialize the result to the studio wire format.
 
   Raises:
     ValueError: if the case fails bounded IR or evidence validation.
     RuntimeError: if the solver cannot execute the audit.
   """
   case = VerificationCase.from_json(text) if isinstance(text, str) else text
-  verification = adherence(case)
-  report = verification.report
-  checks = [check.to_dict() for check in verification.checks]
-  verdict = report.get("rationale_verdict")
-  result = _envelope(case)
-  unknown = [
-    atom.id
-    for atom in case.atoms
-    if not any(
-      finding.atom == atom.id and finding.value != "UNKNOWN"
-      for finding in case.annotations
-    )
-  ]
-  result.update(
-    {
-      "status": "completed",
-      "audit": report,
-      "checks": checks,
-      "summary": {
-        "status": report["status"],
-        "overall": report["protocol_adherent"],
-        "coverage": aggregate(
-          [item.status for item in verification.checks if item.dimension == "coverage"]
-        ),
-        "procedure": report["procedural_adherence"],
-        "grounding": report.get("grounding_correctness", "UNKNOWN"),
-        "consistency": "COMPATIBLE"
-        if report.get("rationale_verdict_consistent") is True
-        else "INCOMPATIBLE"
-        if report.get("rationale_verdict_consistent") is False
-        else "UNKNOWN",
-        "entailment": verdict["status"] if verdict else "NOT_CHECKED",
-      },
-      "unknownAtoms": unknown,
-      "annotations": [
-        {"id": f"finding:{index}:{finding['atom']}", **finding}
-        for index, finding in enumerate(report["findings"])
-      ],
-      "limitations": list(verification.limitations),
-    }
-  )
-  return result
+  return adherence(case).to_dict()
