@@ -1,6 +1,5 @@
-"""Benchmark presets built on Unmask's shared runner."""
+"""Named dataset presets built on Unmask's shared benchmark runner."""
 
-from .adherence import Adherence
 from .ifbench import IFBench
 
-__all__ = ["Adherence", "IFBench"]
+__all__ = ["IFBench"]

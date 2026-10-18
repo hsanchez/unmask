@@ -3,8 +3,7 @@
 from typing import cast
 
 import unmask
-from unmask.benches import Adherence
-from unmask.benchmarks import Benchmark, BenchmarkCase
+from unmask.benchmarks import Adherence, Benchmark, BenchmarkCase
 
 
 def load_cases() -> tuple[BenchmarkCase, ...]:

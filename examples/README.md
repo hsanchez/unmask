@@ -63,7 +63,7 @@ uv run python examples/ifbench.py
 ```
 
 Calls real `unmask.adherence` on three manually annotated JSON-format evaluation
-cases using the `Adherence` preset. Reports SATISFIED, VIOLATED, and UNKNOWN,
+cases using `unmask.benchmarks.Adherence`. Reports SATISFIED, VIOLATED, and UNKNOWN,
 joint agreement on overall outcomes and stable finding keys, resolved coverage,
 and unresolved counts. Expected labels are synthetic; independent review remains
 pending and is explicitly stated in the output.

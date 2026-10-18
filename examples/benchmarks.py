@@ -3,8 +3,8 @@
 from importlib.resources import files
 
 import unmask
-from unmask.benches import Adherence
 from unmask.benchmarks import (
+  Adherence,
   Benchmark,
   BenchmarkCase,
   BenchmarkKind,

@@ -11,14 +11,15 @@ from typing import cast
 import pytest
 
 import unmask
+import unmask.benches as dataset_presets
 import unmask.benchmarks as benchmark_module
 from examples.benchmarks import replay_benchmark
 from examples.ifbench import adherence_benchmark, load_cases
 from tests.helpers import replay_text
 from tests.test_library import REGEX
-from unmask.benches import Adherence, IFBench
-from unmask.benches.adherence import decode_replay, encode_audit, score_adherence
+from unmask.benches import IFBench
 from unmask.benchmarks import (
+  Adherence,
   Benchmark,
   BenchmarkCase,
   BenchmarkKind,
@@ -29,12 +30,21 @@ from unmask.benchmarks import (
   Metric,
   Outcome,
   Score,
+  decode_replay,
+  encode_audit,
   mean_score,
+  score_adherence,
 )
 from unmask.judge import VerificationCase, VerificationResult, adherence
 from unmask.service import ScanResult, bugs
 
 KIND = BenchmarkKind.RESPONSE_COMPLIANCE
+
+
+def test_adherence_configuration_is_separate_from_dataset_presets() -> None:
+  assert Adherence.__module__ == "unmask.benchmarks"
+  assert "Adherence" not in dataset_presets.__all__
+  assert dataset_presets.IFBench is IFBench
 
 
 def adherence_reference(

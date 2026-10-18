@@ -19,8 +19,8 @@ compatibility, live evaluation, or upstream checker implementation is included.
 
 ## IFBench data with your scoring protocol
 
-Presets live in `unmask.benches`; reusable runner and result types live in
-`unmask.benchmarks`. Each preset returns the same `Benchmark`, with no separate
+Named dataset presets live in `unmask.benches`; reusable runner, scoring, task
+configuration, and result types live in `unmask.benchmarks`. Each preset returns the same `Benchmark`, with no separate
 runner, registry, or subclass hierarchy. Dataset files stay outside the package.
 
 Download the single-turn dataset into `data/ifbench` using the pinned command in
@@ -75,10 +75,10 @@ uv run python examples/ifbench.py
 
 It calls real `unmask.adherence` on three manually annotated synthetic JSON-format
 evaluations: correct judge, incorrect judge, and insufficient evidence. It uses
-the `Adherence` preset, not the raw IFBench response-generation preset:
+the `Adherence` benchmark configuration, not the raw IFBench response-generation preset:
 
 ```python
-from unmask.benches import Adherence
+from unmask.benchmarks import Adherence
 import unmask
 
 benchmark = Adherence(
@@ -121,7 +121,7 @@ are rejected. The `joint_agreement` metric grants a case credit only when both
 its overall outcome and its complete finding set match. Missing, unexpected,
 wrong-kind, and wrong-subject findings lose credit; differences are retained in
 the per-case score reason. No partial or wording-based matching is used.
-The preset encoder adds `detected_findings` to the saved benchmark output; the
+The adherence encoder adds `detected_findings` to the saved benchmark output; the
 studio wire format and `VerificationResult.to_dict()` remain unchanged.
 
 UNKNOWN results remain unresolved and are excluded from agreement even when
