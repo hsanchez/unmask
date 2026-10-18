@@ -282,7 +282,9 @@ def test_natural_language_catalog_demonstrates_each_defect(
   assert metadata["interpretationBRationale"]
 
 
-@pytest.mark.parametrize("script", ["bugs.py", "adherence.py"])
+@pytest.mark.parametrize(
+  "script", ["bugs.py", "adherence.py", "benchmarks.py", "ifbench.py"]
+)
 def test_local_api_examples_run_outside_the_checkout(
   script: str, tmp_path: Path
 ) -> None:
@@ -299,6 +301,17 @@ def test_local_api_examples_run_outside_the_checkout(
     assert all(
       kind in result.stdout for kind in ("over_strict", "contradiction", "ambiguity")
     )
+  elif script == "benchmarks.py":
+    assert "not a published benchmark score" in result.stdout
+    assert "denominator=1" in result.stdout
+    assert "Changed decisions: 0" in result.stdout
+  elif script == "ifbench.py":
+    assert "not an official IFBench score" in result.stdout
+    assert "Target: unmask.adherence" in result.stdout
+    assert "supported: SATISFIED / scored" in result.stdout
+    assert "incorrect-judge: VIOLATED / scored" in result.stdout
+    assert "insufficient-evidence: UNKNOWN / unknown" in result.stdout
+    assert "denominator=2" in result.stdout
   else:
     assert "JSON replay: OK / SATISFIED" in result.stdout
     assert "Python case: OK / SATISFIED" in result.stdout

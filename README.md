@@ -157,6 +157,23 @@ reported explicitly rather than treated as adherence. JSON and direct case
 construction both validate invariants; there is no unstructured `from_text`
 constructor or automatic annotation extraction.
 
+## Reusable benchmarks
+
+`unmask.Benchmark` defines a dataset, task contract, reference scoring, and
+aggregation. `BenchmarkRun` retains frozen cases, outputs, metrics, unresolved
+cases, errors, and reproducibility metadata for replay and paired comparison.
+Use typed callable targets, including the existing `adherence` and `bugs` APIs.
+
+Run the local API demonstration with `uv run python examples/benchmarks.py`.
+See [the benchmark API guide](docs/benchmarks.md) for custom adapters, saved
+samples, scoring identities, and explicit denominator rules. The example is a
+single local fixture; it does not establish support for a published benchmark.
+
+`unmask.benches.IFBench` loads local IFBench data with a caller-supplied,
+explicitly named scorer and supports `evaluate(model=...)`. See
+[the IFBench guide](docs/benchmarks.md#ifbench-data-with-your-scoring-protocol)
+and [dataset setup](data/README.md). Official IFBench scoring is not bundled.
+
 ## Provider setup
 
 Regex scanning and diagnosis work out of the box. Natural-language scanning needs an LLM

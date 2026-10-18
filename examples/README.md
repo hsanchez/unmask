@@ -43,3 +43,31 @@ The annotations are supplied semantic assessments. Z3 checks the resulting
 structured model; it does not generate annotations, interpret raw prose, or
 establish hidden reasoning. An empty findings collection alone does not establish
 adherence: inspect `result.status`, `result.overall`, checks, and limitations.
+
+## Benchmark definition and replay — local
+
+```bash
+uv run python examples/benchmarks.py
+```
+
+Wraps the packaged judge replay in a benchmark definition, removes its gold
+verdict from target inputs, freezes the sample, calls `unmask.adherence`, and
+round-trips the sample and run through JSON before comparing a replay. It is
+one API fixture, not a published benchmark or model-quality measurement.
+See [the API guide](../docs/benchmarks.md) for adapter and scoring contracts.
+
+## Unmask adherence benchmark — local synthetic cases
+
+```bash
+uv run python examples/ifbench.py
+```
+
+Calls real `unmask.adherence` on three manually annotated JSON-format evaluation
+cases using the `Adherence` preset. Reports SATISFIED, VIOLATED, and UNKNOWN,
+joint agreement on overall outcomes and stable finding keys, resolved coverage,
+and unresolved counts. Expected labels are synthetic; independent review remains
+pending and is explicitly stated in the output.
+It replaces the former constant-response smoke demonstration. No downloads,
+provider calls, automatic annotation, or official IFBench scoring are involved.
+The raw `IFBench` data adapter remains available separately; see
+[dataset setup](../data/README.md) and [the API guide](../docs/benchmarks.md).

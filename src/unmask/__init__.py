@@ -1,5 +1,6 @@
 """Find specification bugs and assess annotated protocol adherence."""
 
+from .benchmarks import Benchmark, BenchmarkRun
 from .config import TargetConfig
 from .judge import (
   Annotation,
@@ -20,6 +21,8 @@ from .service import BugFinding, ScanResult, bugs
 __all__ = [
   "Annotation",
   "Atom",
+  "Benchmark",
+  "BenchmarkRun",
   "BugFinding",
   "Evidence",
   "Expr",
