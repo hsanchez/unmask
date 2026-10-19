@@ -16,3 +16,5 @@ Plan.md
 
 .env
 data/ifbench/
+
+*.pdf
