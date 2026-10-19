@@ -3,6 +3,8 @@ name = "unmask"
 version = "0.1.0"
 description = "Neuro-symbolic AI specification bug detection"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.14"
 dependencies = [
   "Flask>=3.1",
@@ -18,6 +20,10 @@ anthropic = ["anthropic>=0.20"]
 
 [project.scripts]
 unmask = "unmask.cli:main"
+
+[project.urls]
+Repository = "https://github.com/hsanchez/unmask"
+Issues = "https://github.com/hsanchez/unmask/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -68,4 +74,4 @@ indent-style = "space"
 quote-style = "double"
 
 [tool.uv.sources]
-dotagents = { path = "/Users/huascar/dev/github.com/hsanchez/dotagents" }
+dotagents = { git = "https://github.com/hsanchez/dotagents", rev = "d49ba2ab37965b8793555e8b0ed5b24e32a597b8" }

@@ -1,0 +1,11 @@
+Unmask
+Licensed under the Apache License, Version 2.0.
+
+Repository-local development tooling is derived from DotAgents:
+https://github.com/hsanchez/dotagents
+Copyright 2026 Huascar Sanchez
+Licensed under the Apache License, Version 2.0.
+
+External datasets retain their own licenses and attribution requirements.
+See data/README.md for IFBench provenance and terms. Downloaded datasets are
+not included in the Python distribution.

@@ -394,28 +394,12 @@ wheels = [
 [[package]]
 name = "dotagents"
 version = "0.2.0"
-source = { directory = "/Users/huascar/dev/github.com/hsanchez/dotagents" }
+source = { git = "https://github.com/hsanchez/dotagents?rev=d49ba2ab37965b8793555e8b0ed5b24e32a597b8#d49ba2ab37965b8793555e8b0ed5b24e32a597b8" }
 dependencies = [
     { name = "jinja2" },
     { name = "rich" },
     { name = "tomli-w" },
     { name = "typer" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "jinja2", specifier = ">=3.1.0" },
-    { name = "rich", specifier = ">=13.0.0" },
-    { name = "tomli-w", specifier = ">=1.0.0" },
-    { name = "typer", specifier = ">=0.12.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "prek", specifier = ">=0.2.0" },
-    { name = "pytest", specifier = ">=8.0.0" },
-    { name = "ruff", specifier = ">=0.8.0" },
-    { name = "ty", specifier = ">=0.0.1a1" },
 ]
 
 [[package]]
@@ -1231,7 +1215,7 @@ provides-extras = ["gemini", "openai", "anthropic"]
 [package.metadata.requires-dev]
 dev = [
     { name = "basedpyright", specifier = ">=1.40.2" },
-    { name = "dotagents", directory = "/Users/huascar/dev/github.com/hsanchez/dotagents" },
+    { name = "dotagents", git = "https://github.com/hsanchez/dotagents?rev=d49ba2ab37965b8793555e8b0ed5b24e32a597b8" },
     { name = "mypy", specifier = ">=1.13" },
     { name = "prek", specifier = ">=0.4.13" },
     { name = "pytest", specifier = ">=8.0" },

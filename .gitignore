@@ -15,6 +15,18 @@ PLAN.md
 Plan.md
 
 .env
+.env.*
+!.env.example
+.envrc
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+service-account*.json
+
+# Generated reports can contain private specifications and incidents.
+/output/
 data/ifbench/
 
 *.pdf

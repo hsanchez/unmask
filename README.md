@@ -1,5 +1,7 @@
 # Unmask
 
+[Contributing](CONTRIBUTING.md) · [Apache 2.0 license](LICENSE)
+
 Unmask finds defects in natural-language and executable regex guardrails.
 
 It currently detects three defect classes:
