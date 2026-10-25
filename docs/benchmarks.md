@@ -73,8 +73,10 @@ To benchmark Unmask itself, run the annotated-adherence example:
 uv run python examples/ifbench.py
 ```
 
-It calls real `unmask.adherence` on three manually annotated synthetic JSON-format
-evaluations: correct judge, incorrect judge, and insufficient evidence. It uses
+It calls real `unmask.adherence` on three synthetic JSON-format evaluations:
+correct judge, incorrect judge, and insufficient evidence. JSON-object validity
+comes from `unmask.judge.check_json_object`; judge assessments and reference
+labels remain manually supplied. It uses
 the `Adherence` benchmark configuration, not the raw IFBench response-generation preset:
 
 ```python
@@ -127,10 +129,15 @@ studio wire format and `VerificationResult.to_dict()` remain unchanged.
 UNKNOWN results remain unresolved and are excluded from agreement even when
 expected. Their known finding differences remain in the score reason. The
 `resolved_coverage` metric divides resolved cases (matching or not) by all cases,
-including unknowns, unsupported cases, and errors. Inspect `run.counts` alongside
-these metrics. The example produces two resolved matches and one UNKNOWN:
-joint agreement 1.0 with denominator 2, resolved coverage 2/3 with denominator 3.
-Errors and unknowns can never increase either agreement's denominator or coverage.
+including unknowns, unsupported cases, and errors. `correct_and_resolved` divides
+fully matching, resolved cases by all cases. Unknowns, unsupported cases, errors,
+and resolved mismatches earn no credit. Use this all-case rate alongside agreement
+and coverage; replacing a wrong result with an abstention cannot improve it.
+Inspect `run.counts` alongside these metrics. The example produces two resolved
+matches and one UNKNOWN: joint agreement 1.0 with denominator 2, resolved coverage
+2/3 and correct-and-resolved rate 2/3, both with denominator 3. Empty samples have
+no metric value. This metric addition uses adherence scoring contract v4;
+historical frozen runs retain their recorded scoring identity.
 
 Review status must be `synthetic`, `unreviewed`, or `independently-reviewed`.
 It records the dataset author's declaration, not authenticated review evidence,

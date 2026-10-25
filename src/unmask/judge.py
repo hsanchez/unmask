@@ -28,6 +28,7 @@ MAX_NODES = 1024
 MAX_DEPTH = 16
 
 _AUDIT_BUDGET_MS = 5_000
+_JSON_CHECK_DEPTH = 64
 
 AUDITOR_VERSION = "1"
 AUDIT_SCHEMA_VERSION = 1
@@ -211,6 +212,96 @@ class Annotation:
   value: Truth
   evidence: tuple[Evidence, ...]
   explanation: str
+
+
+def _annotation_id(index: int, atom: str) -> str:
+  return f"finding:{index}:{atom}"
+
+
+def _bounded_json_probe(text: str) -> tuple[str, bool]:
+  closers: list[str] = []
+  in_string = False
+  escaped = False
+  for index, character in enumerate(text):
+    if in_string:
+      if escaped:
+        escaped = False
+      elif character == "\\":
+        escaped = True
+      elif character == '"':
+        in_string = False
+    elif character == '"':
+      in_string = True
+    elif character in "[{":
+      if len(closers) == _JSON_CHECK_DEPTH:
+        # Complete only the prefix so the standard parser can reject earlier
+        # syntax errors without parsing the over-budget subtree.
+        return text[:index] + "null" + "".join(reversed(closers)), True
+      closers.append("}" if character == "{" else "]")
+    elif character in "]}":
+      if not closers or closers.pop() != character:
+        return text[: index + 1], False
+  return text, False
+
+
+def check_json_object(response: str, *, atom: str) -> Annotation:
+  """Observe whether the entire response is a JSON object, for a context atom.
+
+  Checks syntax and top-level type only; duplicate keys are accepted. Numbers
+  are parsed without numeric conversion. For possible objects, nesting beyond
+  64 containers is UNKNOWN if its prefix is valid; definite prefix errors fail.
+  Parser nesting exhaustion is also UNKNOWN.
+  The enclosing VerificationCase validates the atom declaration and evidence.
+
+  Raises:
+    ValidationError: if response/atom text is invalid or response exceeds 1 MB.
+  """
+  _ = require_text(atom)
+  _require_instance(response, str)
+  require(len(response) <= MAX_BYTES, "response exceeds byte limit")
+  _ = require_text(response)
+  require(len(response.encode("utf-8")) <= MAX_BYTES, "response exceeds byte limit")
+  evidence = (Evidence("response", 0, len(response), response),)
+  if not response.lstrip(" \t\r\n").startswith("{"):
+    return Annotation(
+      atom,
+      Truth.FALSE,
+      evidence,
+      "json-object/v2: Response does not start with a JSON object.",
+    )
+  probe, depth_exceeded = _bounded_json_probe(response)
+
+  def reject_constant(value: str) -> None:
+    del value
+    raise ValueError("non-JSON numeric constant")
+
+  try:
+    _ = cast(
+      "object",
+      json.loads(probe, parse_int=str, parse_float=str, parse_constant=reject_constant),
+    )
+  except json.JSONDecodeError as exc:
+    value = Truth.FALSE
+    detail = f"Invalid JSON at character {exc.pos}."
+  except ValueError:
+    value = Truth.FALSE
+    detail = "Non-JSON numeric constant."
+  except RecursionError:
+    value = Truth.UNKNOWN
+    detail = "Parser nesting limit reached; validity is unresolved."
+  else:
+    value = Truth.UNKNOWN if depth_exceeded else Truth.TRUE
+    detail = (
+      f"Nesting limit ({_JSON_CHECK_DEPTH}) exceeded; validity is unresolved."
+      if depth_exceeded
+      else "JSON object."
+    )
+  return Annotation(
+    atom,
+    value,
+    evidence,
+    f"json-object/v2: {detail}",
+  )
 
 
 @dataclass(frozen=True)
@@ -792,7 +883,7 @@ def audit(case: VerificationCase, timeout_ms: int = 1000) -> AuditReport:
   protocol_engine = Engine(declarations, symbols, timeout_ms, deadline)
   facts = [
     (
-      f"finding:{index}:{finding_entry.atom}",
+      _annotation_id(index, finding_entry.atom),
       require_bool_ref(
         cast(
           "object", symbols[finding_entry.atom] == (finding_entry.value == Truth.TRUE)
@@ -980,6 +1071,7 @@ class VerificationFinding:
   kind: str
   summary: str
   check: VerificationCheck | None = None
+  conflicting_annotations: tuple[Annotation, ...] = ()
 
 
 _CONSISTENCY_LABELS: dict[bool | None, str] = {
@@ -1053,10 +1145,24 @@ class VerificationResult:
       if check.status == "REFUTED"
     )
     if self.status.startswith("INCONSISTENT_"):
+      solver = self.report.get("solver")
+      core: set[str] = (
+        set(solver["unsat_core"])
+        if solver and self.status != "INCONSISTENT_PROTOCOL"
+        else set()
+      )
+      conflicting_annotations = tuple(
+        annotation
+        for index, annotation in enumerate(self.case.annotations)
+        if _annotation_id(index, annotation.atom) in core
+      )
       return (
         *findings,
         VerificationFinding(
-          "inputs", self.status.lower(), self.status.replace("_", " ").capitalize()
+          "inputs",
+          self.status.lower(),
+          self.status.replace("_", " ").capitalize(),
+          conflicting_annotations=conflicting_annotations,
         ),
       )
     return findings
@@ -1111,7 +1217,7 @@ class VerificationResult:
       "summary": self.summary,
       "unknownAtoms": self.unknown_atoms,
       "annotations": [
-        {"id": f"finding:{index}:{finding['atom']}", **finding}
+        {"id": _annotation_id(index, finding["atom"]), **finding}
         for index, finding in enumerate(self.report["findings"])
       ],
       "limitations": list(self.limitations),
@@ -1196,7 +1302,7 @@ def adherence(case: VerificationCase, *, timeout_ms: int = 1000) -> Verification
             "start": evidence.start,
             "end": evidence.end,
             "quote": evidence.quote,
-            "annotationId": f"finding:{index}:{finding.atom}",
+            "annotationId": _annotation_id(index, finding.atom),
           }
         )
     checks.append(

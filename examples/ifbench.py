@@ -1,20 +1,20 @@
-"""Benchmark unmask.adherence on manually annotated, IFBench-shaped JSON cases."""
+"""Benchmark adherence using checked JSON validity and supplied judge assessments."""
 
 from typing import cast
 
 import unmask
 from unmask.benchmarks import Adherence, Benchmark, BenchmarkCase
+from unmask.judge import check_json_object
 
 
 def load_cases() -> tuple[BenchmarkCase, ...]:
   cases: list[BenchmarkCase] = []
-  for identifier, response, rationale, expected, response_is_json, observed in (
+  for identifier, response, rationale, expected, observed in (
     (
       "supported",
       '{"greeting":"hello"}',
       "The response is a JSON object. PASS.",
       "SATISFIED",
-      True,
       True,
     ),
     (
@@ -22,19 +22,13 @@ def load_cases() -> tuple[BenchmarkCase, ...]:
       "hello",
       "The response is a JSON object. PASS.",
       "VIOLATED",
-      False,
       True,
     ),
-    ("insufficient-evidence", '{"greeting":"hello"}', "PASS.", "UNKNOWN", True, False),
+    ("insufficient-evidence", '{"greeting":"hello"}', "PASS.", "UNKNOWN", False),
   ):
     rationale_evidence = (unmask.Evidence("rationale", 0, len(rationale), rationale),)
     annotations = [
-      unmask.Annotation(
-        "context_json",
-        unmask.Truth.TRUE if response_is_json else unmask.Truth.FALSE,
-        (unmask.Evidence("response", 0, len(response), response),),
-        "Manually assessed JSON-object validity of this fixed response.",
-      ),
+      check_json_object(response, atom="context_json"),
     ]
     if observed:
       annotations.extend(
@@ -56,7 +50,7 @@ def load_cases() -> tuple[BenchmarkCase, ...]:
     examined = unmask.Expr("atom", atom="examined")
     case = unmask.VerificationCase(
       id=identifier,
-      protocol_text="Assess the response to 'Return a JSON object with a greeting.' Explicitly check JSON-object validity. PASS iff it is a JSON object.",
+      protocol_text="Assess the response to 'Return a JSON object.' Explicitly check JSON-object validity. PASS iff it is a JSON object.",
       context="The expected response format is a JSON object.",
       response=response,
       rationale=rationale,
@@ -77,7 +71,7 @@ def load_cases() -> tuple[BenchmarkCase, ...]:
       annotations=tuple(annotations),
       grounding_pairs=(("judge_json", "context_json"),),
       extraction={
-        "provider": "manual-synthetic-fixture",
+        "provider": "manual-judge-assessments-and-json-object/v2",
         "translation_status": "VALID",
       },
     )
@@ -108,7 +102,7 @@ def adherence_benchmark() -> Benchmark[
 ]:
   return Adherence(
     name="ifbench-shaped-adherence-example",
-    dataset_revision="manual-json-evaluations/v2",
+    dataset_revision="checked-json-evaluations/v4",
     load=load_cases,
   )
 
@@ -120,7 +114,9 @@ def main() -> None:
     target_revision="default-timeout-1000ms/v1",
   )
   print("Target: unmask.adherence")
-  print("Manually annotated synthetic cases; not an official IFBench score.")
+  print(
+    "Checked JSON validity; supplied judge assessments; not an official IFBench score."
+  )
   print("Reference review: synthetic; independent ground-truth review pending.")
   expected = {case.id: case.reference["overall"] for case in run.frozen.cases}
   for result in run.results:
@@ -135,10 +131,10 @@ def main() -> None:
     print(f"  Detected findings: {output['detected_findings']}")
     if result.score.reason:
       print(f"  {result.score.reason}")
-  print("Joint outcome/finding agreement and coverage:", run.metrics)
+  print("Agreement, coverage, and correct-and-resolved rate:", run.metrics)
   print("Outcomes:", run.counts)
   print(
-    "UNKNOWN cases are excluded from agreement; annotations are supplied, not inferred."
+    "UNKNOWN cases are excluded from agreement; judge assessments are supplied, not inferred."
   )
 
 

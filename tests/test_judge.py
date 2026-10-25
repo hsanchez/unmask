@@ -24,16 +24,99 @@ from tests.helpers import (
 from unmask.judge import (
   AuditReport,
   Expr,
+  Truth,
   ValidationError,
   VerificationCase,
   adherence,
   audit,
   audit_judge_case,
+  check_json_object,
   compile_expr,
   validate_audit_case,
 )
 
 Mutation = Callable[[dict[str, object]], object]
+
+
+@pytest.mark.parametrize(
+  "response,expected",
+  [
+    ("{}", Truth.TRUE),
+    (' \n {"greeting": "héllo 👋"} \t', Truth.TRUE),
+    ('{"items": [1, true, null, {"x": "\\""}]}', Truth.TRUE),
+    ('{"x": 1, "x": 2}', Truth.TRUE),
+    ('{"x": 1e99999}', Truth.TRUE),
+    ('{"x": ' + "9" * 5000 + "}", Truth.TRUE),
+    ("[]", Truth.FALSE),
+    ("null", Truth.FALSE),
+    ('"{}"', Truth.FALSE),
+    ("hello", Truth.FALSE),
+    ("```json\n{}\n```", Truth.FALSE),
+    ("{} trailing", Truth.FALSE),
+    ("{} {}", Truth.FALSE),
+    ('{"x": 1,}', Truth.FALSE),
+    ("\ufeff{}", Truth.FALSE),
+    ('{"x": NaN}', Truth.FALSE),
+    ('{"x": Infinity}', Truth.FALSE),
+    ('{"x": -Infinity}', Truth.FALSE),
+    ('{"x": "NaN"}', Truth.TRUE),
+    ("{} " + "[" * 65, Truth.FALSE),
+    ("{" + "[" * 65 + "garbage", Truth.FALSE),
+    ('{"x":]' + "[" * 65, Truth.FALSE),
+    ('{"x": 0 "y":' + "[" * 65, Truth.FALSE),
+    ('{"x": NaN, "y":' + "[" * 65, Truth.FALSE),
+    ('{"x": "\\ud800"}', Truth.TRUE),
+    ('{"x": [' * 33 + "garbage", Truth.UNKNOWN),
+    ("[" * 65 + "oops", Truth.FALSE),
+    ("[" * 65 + "0" + "]" * 65, Truth.FALSE),
+    ("garbage " + "[" * 65, Truth.FALSE),
+    ("\u00a0{}", Truth.FALSE),
+  ],
+)
+def test_json_object_observation(response: str, expected: Truth) -> None:
+  annotation = check_json_object(response, atom="format")
+  assert annotation.atom == "format"
+  assert annotation.value == expected
+  assert annotation.explanation.startswith("json-object/v2:")
+  assert len(annotation.evidence) == 1
+  evidence = annotation.evidence[0]
+  assert (evidence.source, evidence.start, evidence.end, evidence.quote) == (
+    "response",
+    0,
+    len(response),
+    response,
+  )
+
+
+@pytest.mark.parametrize("depth,expected", [(64, Truth.TRUE), (65, Truth.UNKNOWN)])
+def test_json_nesting_limit(depth: int, expected: Truth) -> None:
+  response = '{"x":' * depth + "0" + "}" * depth
+  observation = check_json_object(response, atom="format")
+  assert observation.value == expected
+
+
+@pytest.mark.parametrize("text", ["[" * 1000, '\\"' * 1000, "\\" * 1000])
+def test_json_nesting_ignores_escaped_string_content(text: str) -> None:
+  response = json.dumps({"text": text})
+  assert check_json_object(response, atom="format").value == Truth.TRUE
+
+
+@pytest.mark.parametrize(
+  "response", ["", "   ", "\ud800", "x" * 1_000_001, "é" * 500_001]
+)
+def test_json_checker_rejects_invalid_source_input(response: str) -> None:
+  with pytest.raises(ValidationError):
+    _ = check_json_object(response, atom="format")
+
+
+def test_json_checker_rejects_non_text_input() -> None:
+  with pytest.raises(ValidationError):
+    _ = check_json_object(cast("str", cast("object", {})), atom="format")
+
+
+def test_json_checker_requires_an_atom_name() -> None:
+  with pytest.raises(ValidationError):
+    _ = check_json_object("{}", atom="")
 
 
 def _audit_data(data: dict[str, object]) -> AuditReport:

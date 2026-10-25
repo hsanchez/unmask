@@ -137,3 +137,113 @@ limits. Exhausted budgets produce solver-unknown results.
 The server accepts one audit at a time per process. Cancelling stops the browser
 from waiting; the current solver run finishes within its budget before releasing
 the slot.
+
+## Deterministic JSON observation
+
+`unmask.judge.check_json_object(response, atom="context_json")` returns an
+`Annotation` for a declared context atom. It checks the entire response as JSON,
+requires an object at the top level, and records `json-object/v2` plus an exact
+response span. Pair that atom with a supplied judge assessment through ordinary
+`VerificationCase.grounding_pairs`; the existing Z3 engine checks their agreement.
+
+The checker accepts JSON whitespace and duplicate object keys. It checks syntax
+and top-level type, with no schema, required-field, or key-uniqueness requirement.
+Escaped lone surrogates are accepted as JSON syntax; this does not promise
+interoperability with stricter Unicode consumers.
+Numbers are parsed without conversion to machine integers/floats, so large valid
+numbers remain valid; NaN and Infinity are rejected. Markdown fences and trailing
+text are invalid. A response whose first non-JSON-whitespace character is not
+`{` fails immediately. At nesting depth 64, the standard parser checks a bounded
+prefix with the unexamined subtree replaced by a placeholder and containers
+closed. Definite prefix syntax errors return FALSE. A valid prefix returns
+UNKNOWN: errors beyond that point may remain undetected, and deep valid objects
+are not declared invalid. Parser nesting exhaustion also returns UNKNOWN.
+Invalid source types, empty/whitespace-only sources, invalid Unicode, and sources
+over 1 MB raise `ValidationError`, following the replay source contract. The
+complete replay must still fit its aggregate byte limit. The enclosing case
+validates the atom's declaration, identifier, and evidence role.
+
+This creates an objective observation; it does not extract a judge's interpretation
+or prove that a natural-language instruction was translated correctly.
+
+## Typed claim inputs
+
+`unmask.claims.ClaimCase` is a manually reviewed authoring layer for one fixed
+protocol: identify factual response claims, explicitly address each, compare
+judge support with independent context support, and PASS iff every factual response claim
+is judged supported. It compiles finite obligations into the existing replay
+schema and solver. Arbitrary protocols still use `VerificationCase` directly.
+
+Use `Message` for identified source ranges and `Claim` for ranges inside response
+messages. Reuse `unmask.judge.Evidence` and `Truth`. All offsets remain half-open
+Unicode code-point ranges in the original context, response, or rationale;
+normalization and source flattening are never performed.
+
+`RelationReview` supplies the assessment, message scope, exact evidence, and
+explanation for one claim:
+
+| Relation | Evidence source | Meaning |
+| --- | --- | --- |
+| `ADDRESSES` | rationale | Judge explicitly addresses the claim |
+| `JUDGES_SUPPORTED` | rationale | Judge labels the claim supported |
+| `SUPPORTS` | context | Independent reviewer finds context support |
+| `CONTRADICTS` | context | Independent reviewer finds a contradiction |
+
+Missing reviews and `Truth.UNKNOWN` leave facts unconstrained. A TRUE contradiction
+establishes lack of support; a FALSE contradiction does not establish support.
+A FALSE support assessment must review all declared context messages covering
+the entire context, rather than infer global absence from a partial search.
+Similarly, FALSE addressing requires review of the entire rationale. A FALSE
+`JUDGES_SUPPORTED` review means an explicit unsupported judgment; silence remains
+UNKNOWN.
+Conflicting support assessments remain inconsistent inputs. A correct FAIL on
+an unsupported response can satisfy adherence: the judge's correctness is the
+subject, rather than the candidate response's quality.
+
+An optional `InventoryReview` states completeness over response messages. TRUE
+requires all declared response messages to cover the entire response. Omitted
+or unknown completeness prevents global satisfaction and keeps unlisted judgments
+unknown: positive labels on a partial inventory cannot force PASS. Empty claim
+inventories cannot establish satisfaction. Explicit violations remain detectable alongside unrelated
+unknowns. The compiler validates scope and quotations; reviewers remain
+responsible for semantic truth, claim inventory completeness, and translation
+faithfulness. Matching quotations alone proves none of these.
+
+IDs are globally distinct ASCII identifiers, up to 48 characters; record fields
+use immutable tuples. Expansion is bounded before atom creation: 42 claims
+(three atoms each plus inventory and, when incomplete, an unknown remainder),
+128 messages, and 255 relation reviews.
+Each review has at most 16 evidence spans. Typed inputs, serialized artifacts,
+and compiled replays each obey the existing 1,000,000-byte limit. Invalid inputs
+raise `ValidationError`.
+
+`compiled.case` is an ordinary `VerificationCase`: existing adherence, benchmark,
+CLI, and studio paths accept its replay JSON without changes. Stable claim IDs
+produce stable atom and requirement IDs, independent of record order or added
+claims. `compiled.claims_for(finding)` maps check atoms and conflicting annotations
+back to typed claims. For an inconsistency, `finding.conflicting_annotations`
+contains the original annotations selected by the solver's UNSAT core, including
+their quotations and explanations. A core is sufficient evidence of a conflict;
+it need not be minimal or include every conflicting review. Inventory findings
+and protocol conflicts without annotations have no claim attribution.
+
+`compiled.review_gaps` lists missing or unresolved addressing, judge-support,
+independent-support, and inventory assessments, using stable atom IDs as subjects.
+Each gap carries its claim when applicable. Gaps are separate from violation
+findings and can coexist with detected violations. An incomplete inventory gap
+cannot identify claims that were never supplied. The fixed protocol requires a
+complete reviewed inventory: an explicit FALSE inventory assessment refutes that
+obligation, but does not establish that the judge omitted a claim in its reasoning.
+
+`CompiledClaims.to_json()` stores typed inputs and bindings in a separate
+versioned artifact (`schema_version: 1`, `compiler: claims-v1`). Reload with
+`CompiledClaims.from_json(text)`, which recompiles and checks binding consistency.
+The studio accepts `json.dumps(compiled.case.to_dict())`, rather than the typed
+artifact. Artifacts are supplied assertions, not authenticated review records.
+Binding validation checks internal consistency, rather than a signature or
+content integrity. Authenticate reviews out of band when accepting contributed
+artifacts. The compiler's `VALID` translation status describes the fixed protocol
+lowering; semantic labels and completeness remain unauthenticated caller assertions.
+Changes to generated IDs or lowering semantics require a new compiler version;
+`claims-v1` artifacts retain their current interpretation and identifier contract.
+Persist ordinary replay JSON when only the solver input is needed.

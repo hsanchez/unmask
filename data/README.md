@@ -2,6 +2,10 @@
 
 - `README.md`: tracked dataset sources and setup instructions.
 - `fixtures/`: tracked, small synthetic cases for offline examples and tests.
+- `fixtures/claims-v1.json`: frozen typed artifact and full expected replay for
+  the claims-v1 compatibility contract. Keep its expectations fixed; changes to
+  lowering or identifiers require a compiler version change and compatibility
+  handling, rather than regenerating this fixture to match new behavior.
 - `ifbench/`: git-ignored downloaded dataset, excluded from the Python package.
 
 `ifbench/IFBench_test.jsonl` holds the local, single-turn IFBench dataset.

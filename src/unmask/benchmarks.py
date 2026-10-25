@@ -915,13 +915,22 @@ def score_adherence(
 
 
 def aggregate_adherence(results: tuple[CaseResult, ...]) -> tuple[Metric, ...]:
-  """Report joint agreement on resolved cases and coverage over every case."""
+  """Report resolved agreement, coverage, and correct-and-resolved rate."""
   agreement = mean_score(results)[0]
+  correct = sum(
+    result.score.outcome == Outcome.SCORED and result.score.value == 1.0
+    for result in results
+  )
   return (
     Metric("joint_agreement", agreement.value, agreement.denominator),
     Metric(
       "resolved_coverage",
       agreement.denominator / len(results) if results else None,
+      len(results),
+    ),
+    Metric(
+      "correct_and_resolved",
+      correct / len(results) if results else None,
       len(results),
     ),
   )
@@ -955,7 +964,7 @@ def Adherence(
   return Benchmark(
     name=name,
     dataset_revision=dataset_revision,
-    scoring_id="adherence-overall-and-findings/exact-set/mean-resolved/v3",
+    scoring_id="adherence-overall-and-findings/exact-set/mean-resolved/v4",
     kind=BenchmarkKind.JUDGE_AUDIT,
     load=checked_cases,
     decode_input=decode_replay,

@@ -283,7 +283,7 @@ def test_natural_language_catalog_demonstrates_each_defect(
 
 
 @pytest.mark.parametrize(
-  "script", ["bugs.py", "adherence.py", "benchmarks.py", "ifbench.py"]
+  "script", ["bugs.py", "adherence.py", "benchmarks.py", "ifbench.py", "claims.py"]
 )
 def test_local_api_examples_run_outside_the_checkout(
   script: str, tmp_path: Path
@@ -301,6 +301,9 @@ def test_local_api_examples_run_outside_the_checkout(
     assert all(
       kind in result.stdout for kind in ("over_strict", "contradiction", "ambiguity")
     )
+  elif script == "claims.py":
+    assert "VIOLATED" in result.stdout
+    assert "grounding ['role']" in result.stdout
   elif script == "benchmarks.py":
     assert "not a published benchmark score" in result.stdout
     assert "denominator=1" in result.stdout

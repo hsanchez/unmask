@@ -1,0 +1,264 @@
+{
+  "artifact": {
+    "bindings": [
+      {
+        "addressed_atom": "addressed_role",
+        "claim": "role",
+        "context_atom": "support_role",
+        "judge_atom": "judge_role",
+        "requirement": "claim:role:addressed"
+      }
+    ],
+    "compiler": "claims-v1",
+    "input": {
+      "claims": [
+        {
+          "id": "role",
+          "message": "response_msg",
+          "span": {
+            "end": 13,
+            "quote": "Alice is CEO.",
+            "source": "response",
+            "start": 0
+          }
+        }
+      ],
+      "context": "Alice is CTO.",
+      "id": "role_review",
+      "inventory": {
+        "evidence": [
+          {
+            "end": 13,
+            "quote": "Alice is CEO.",
+            "source": "response",
+            "start": 0
+          }
+        ],
+        "explanation": "Reviewed entire response: one factual claim.",
+        "messages": [
+          "response_msg"
+        ],
+        "value": "TRUE"
+      },
+      "messages": [
+        {
+          "id": "context_msg",
+          "span": {
+            "end": 13,
+            "quote": "Alice is CTO.",
+            "source": "context",
+            "start": 0
+          }
+        },
+        {
+          "id": "response_msg",
+          "span": {
+            "end": 13,
+            "quote": "Alice is CEO.",
+            "source": "response",
+            "start": 0
+          }
+        },
+        {
+          "id": "judge_msg",
+          "span": {
+            "end": 43,
+            "quote": "The context supports Alice being CEO. PASS.",
+            "source": "rationale",
+            "start": 0
+          }
+        }
+      ],
+      "rationale": "The context supports Alice being CEO. PASS.",
+      "response": "Alice is CEO.",
+      "reviews": [
+        {
+          "claim": "role",
+          "evidence": [
+            {
+              "end": 43,
+              "quote": "The context supports Alice being CEO. PASS.",
+              "source": "rationale",
+              "start": 0
+            }
+          ],
+          "explanation": "Judge explicitly addresses Alice's role.",
+          "id": "address",
+          "messages": [
+            "judge_msg"
+          ],
+          "relation": "addresses",
+          "value": "TRUE"
+        },
+        {
+          "claim": "role",
+          "evidence": [
+            {
+              "end": 43,
+              "quote": "The context supports Alice being CEO. PASS.",
+              "source": "rationale",
+              "start": 0
+            }
+          ],
+          "explanation": "Judge states the claim is supported.",
+          "id": "judge",
+          "messages": [
+            "judge_msg"
+          ],
+          "relation": "judges_supported",
+          "value": "TRUE"
+        },
+        {
+          "claim": "role",
+          "evidence": [
+            {
+              "end": 13,
+              "quote": "Alice is CTO.",
+              "source": "context",
+              "start": 0
+            }
+          ],
+          "explanation": "Independent review finds no support for CEO in the complete context.",
+          "id": "support",
+          "messages": [
+            "context_msg"
+          ],
+          "relation": "supports",
+          "value": "FALSE"
+        }
+      ],
+      "verdict": "PASS"
+    },
+    "schema_version": 1
+  },
+  "replay": {
+    "schema_version": 1,
+    "id": "role_review",
+    "context": "Alice is CTO.",
+    "response": "Alice is CEO.",
+    "rationale": "The context supports Alice being CEO. PASS.",
+    "verdict": "PASS",
+    "gold_verdict": null,
+    "protocol": {
+      "text": "Identify all factual response claims and explicitly assess each against the supplied context. Judge support must agree with independent context review. PASS iff every factual response claim is judged supported. Claim inventory completeness must be reviewed across the entire response.",
+      "atoms": [
+        {
+          "id": "inventory_complete",
+          "role": "context",
+          "description": "Reviewed claim inventory is complete"
+        },
+        {
+          "id": "judge_role",
+          "role": "judge",
+          "description": "Judge support for claim role"
+        },
+        {
+          "id": "support_role",
+          "role": "context",
+          "description": "Independent support for claim role"
+        },
+        {
+          "id": "addressed_role",
+          "role": "procedure",
+          "description": "Judge addresses claim role"
+        }
+      ],
+      "decision": {
+        "op": "and",
+        "args": [
+          {
+            "atom": "judge_role"
+          }
+        ]
+      },
+      "constraints": [],
+      "requirements": [
+        {
+          "id": "inventory_complete",
+          "description": "Review the complete response claim inventory",
+          "expr": {
+            "atom": "inventory_complete"
+          },
+          "addressed": {
+            "atom": "inventory_complete"
+          }
+        },
+        {
+          "id": "claim:role:addressed",
+          "description": "Address claim role",
+          "expr": {
+            "atom": "addressed_role"
+          },
+          "addressed": {
+            "atom": "addressed_role"
+          }
+        }
+      ]
+    },
+    "findings": [
+      {
+        "atom": "inventory_complete",
+        "value": "TRUE",
+        "explanation": "Reviewed entire response: one factual claim.",
+        "evidence": [
+          {
+            "source": "response",
+            "start": 0,
+            "end": 13,
+            "quote": "Alice is CEO."
+          }
+        ]
+      },
+      {
+        "atom": "addressed_role",
+        "value": "TRUE",
+        "explanation": "address: Judge explicitly addresses Alice's role.",
+        "evidence": [
+          {
+            "source": "rationale",
+            "start": 0,
+            "end": 43,
+            "quote": "The context supports Alice being CEO. PASS."
+          }
+        ]
+      },
+      {
+        "atom": "judge_role",
+        "value": "TRUE",
+        "explanation": "judge: Judge states the claim is supported.",
+        "evidence": [
+          {
+            "source": "rationale",
+            "start": 0,
+            "end": 43,
+            "quote": "The context supports Alice being CEO. PASS."
+          }
+        ]
+      },
+      {
+        "atom": "support_role",
+        "value": "FALSE",
+        "explanation": "support: Independent review finds no support for CEO in the complete context.",
+        "evidence": [
+          {
+            "source": "context",
+            "start": 0,
+            "end": 13,
+            "quote": "Alice is CTO."
+          }
+        ]
+      }
+    ],
+    "grounding_pairs": [
+      [
+        "judge_role",
+        "support_role"
+      ]
+    ],
+    "extraction": {
+      "provider": "caller-supplied-claim-compiler",
+      "translation_status": "VALID",
+      "notes": "VALID describes the fixed protocol lowering only. Semantic assessments and completeness are unauthenticated caller assertions, not proved or independently reviewed."
+    }
+  }
+}

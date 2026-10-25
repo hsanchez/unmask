@@ -159,6 +159,12 @@ reported explicitly rather than treated as adherence. JSON and direct case
 construction both validate invariants; there is no unstructured `from_text`
 constructor or automatic annotation extraction.
 
+For reviewed factual-claim protocols, `unmask.claims.ClaimCase` provides typed
+messages, claims, relationships, and a scoped completeness review. Its compiler
+returns the existing `VerificationCase` plus claim-level provenance; use
+`unmask.adherence(compiled.case)`. See [the local example](examples/claims.py)
+and [input contract](docs/schemas.md#typed-claim-inputs).
+
 ## Reusable benchmarks
 
 `unmask.Benchmark` defines a dataset, task contract, reference scoring, and

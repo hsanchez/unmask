@@ -44,6 +44,18 @@ structured model; it does not generate annotations, interpret raw prose, or
 establish hidden reasoning. An empty findings collection alone does not establish
 adherence: inspect `result.status`, `result.overall`, checks, and limitations.
 
+## Typed claim reviews — local
+
+```bash
+uv run python examples/claims.py
+```
+
+Constructs messages, a response claim, evidence-backed relation reviews, and an
+explicit completeness review. Compiles these to the existing `VerificationCase`,
+round-trips the separate typed artifact, and localizes a grounding finding to the
+claim. All semantic labels are manually supplied synthetic examples. See
+[typed claim inputs](../docs/schemas.md#typed-claim-inputs) for scope and limits.
+
 ## Benchmark definition and replay — local
 
 ```bash
@@ -62,12 +74,15 @@ See [the API guide](../docs/benchmarks.md) for adapter and scoring contracts.
 uv run python examples/ifbench.py
 ```
 
-Calls real `unmask.adherence` on three manually annotated JSON-format evaluation
-cases using `unmask.benchmarks.Adherence`. Reports SATISFIED, VIOLATED, and UNKNOWN,
+Calls real `unmask.adherence` on three JSON-format evaluation cases using
+`unmask.benchmarks.Adherence`. JSON-object validity is checked by
+`unmask.judge.check_json_object`; judge interpretations remain manually supplied.
+Reports SATISFIED, VIOLATED, and UNKNOWN,
 joint agreement on overall outcomes and stable finding keys, resolved coverage,
-and unresolved counts. Expected labels are synthetic; independent review remains
+the correct-and-resolved rate over all cases, and unresolved counts.
+Expected labels are synthetic; independent review remains
 pending and is explicitly stated in the output.
 It replaces the former constant-response smoke demonstration. No downloads,
-provider calls, automatic annotation, or official IFBench scoring are involved.
+provider calls, automatic semantic interpretation, or official IFBench scoring are involved.
 The raw `IFBench` data adapter remains available separately; see
 [dataset setup](../data/README.md) and [the API guide](../docs/benchmarks.md).

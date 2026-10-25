@@ -30,12 +30,18 @@ from unmask.benchmarks import (
   Metric,
   Outcome,
   Score,
+  aggregate_adherence,
   decode_replay,
   encode_audit,
   mean_score,
   score_adherence,
 )
-from unmask.judge import VerificationCase, VerificationResult, adherence
+from unmask.judge import (
+  VerificationCase,
+  VerificationResult,
+  adherence,
+  check_json_object,
+)
 from unmask.service import ScanResult, bugs
 
 KIND = BenchmarkKind.RESPONSE_COMPLIANCE
@@ -90,6 +96,8 @@ def test_ifbench_example_calls_real_unmask_adherence(
     seen.append(case.id)
     assert case.gold_verdict is None
     assert "review_status" not in case.to_dict()
+    observation = next(item for item in case.annotations if item.atom == "context_json")
+    assert observation.explanation.startswith("json-object/v2:")
     return real_adherence(case)
 
   monkeypatch.setattr(unmask, "adherence", observe)
@@ -104,6 +112,7 @@ def test_ifbench_example_calls_real_unmask_adherence(
   assert run.metrics == (
     Metric("joint_agreement", 1.0, 2),
     Metric("resolved_coverage", 2 / 3, 3),
+    Metric("correct_and_resolved", 2 / 3, 3),
   )
   assert run.counts == {
     "total": 3,
@@ -112,6 +121,34 @@ def test_ifbench_example_calls_real_unmask_adherence(
     "unsupported": 0,
     "error": 0,
   }
+
+
+@pytest.mark.parametrize(
+  "response,expected",
+  [
+    ('{"answer": 1}', "SATISFIED"),
+    ("[]", "VIOLATED"),
+    ('{"answer": NaN}', "VIOLATED"),
+    ('{"x":' * 65 + "0" + "}" * 65, "UNKNOWN"),
+  ],
+)
+def test_executable_json_observation_drives_solver_result(
+  response: str, expected: str
+) -> None:
+  sample = next(case for case in load_cases() if case.id == "supported")
+  case = decode_replay(sample.inputs)
+  observations = tuple(
+    check_json_object(response, atom=annotation.atom)
+    if annotation.atom == "context_json"
+    else annotation
+    for annotation in case.annotations
+  )
+  result = adherence(replace(case, response=response, annotations=observations))
+  assert result.overall == expected
+  if expected == "VIOLATED":
+    assert [finding.kind for finding in result.findings] == ["grounding"]
+  else:
+    assert not result.findings
 
 
 def test_adherence_scorer_detects_disagreement() -> None:
@@ -260,7 +297,41 @@ def test_adherence_errors_reduce_resolved_coverage() -> None:
   assert run.metrics == (
     Metric("joint_agreement", None, 0),
     Metric("resolved_coverage", 0.0, 3),
+    Metric("correct_and_resolved", 0.0, 3),
   )
+
+
+def test_all_case_metric_counts_unresolved_and_wrong_results() -> None:
+  scores = (
+    Score(Outcome.SCORED, 1.0, "SATISFIED"),
+    Score(Outcome.SCORED, 0.0, "VIOLATED"),
+    Score(Outcome.UNKNOWN, reason="Insufficient evidence"),
+    Score(Outcome.UNSUPPORTED, reason="Unsupported check"),
+    Score(Outcome.ERROR, reason="Execution failed"),
+  )
+  results = tuple(
+    CaseResult(
+      str(index),
+      score,
+      None if score.outcome == Outcome.ERROR else "{}",
+      0.0,
+      "target" if score.outcome == Outcome.ERROR else None,
+    )
+    for index, score in enumerate(scores)
+  )
+  assert aggregate_adherence(results) == (
+    Metric("joint_agreement", 0.5, 2),
+    Metric("resolved_coverage", 0.4, 5),
+    Metric("correct_and_resolved", 0.2, 5),
+  )
+  abstained = replace(results[1], score=Score(Outcome.UNKNOWN, reason="Abstained"))
+  assert aggregate_adherence((results[0], abstained, *results[2:]))[-1] == Metric(
+    "correct_and_resolved", 0.2, 5
+  )
+
+
+def test_all_case_metric_has_no_value_for_empty_sample() -> None:
+  assert aggregate_adherence(())[-1] == Metric("correct_and_resolved", None, 0)
 
 
 def test_callable_model_evaluation() -> None:
